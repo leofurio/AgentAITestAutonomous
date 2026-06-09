@@ -1,4 +1,4 @@
-"""AgentLoop: the Claude tool-use orchestration that drives the browser.
+"""AgentLoop: the tool-use orchestration that drives the browser.
 
 The loop is intentionally *manual* (rather than the SDK tool-runner) so it can stream
 each step to the UI via the EventBus, enforce a max-steps guard, and flush a partial
@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from ..config import Settings
 from .events import EventBus
 from .prompts import SYSTEM_PROMPT, build_user_instruction
+from .providers import ensure_agent_client
 from .schemas import Verdict
 
 
@@ -29,7 +30,7 @@ class AgentLoop:
         bus: EventBus,
         run_dir: Path,
     ) -> None:
-        self.client = client
+        self.client = ensure_agent_client(client, settings)
         self.settings = settings
         self.run_id = run_id
         self.instruction = instruction
@@ -101,15 +102,15 @@ class AgentLoop:
         max_steps = self.settings.agent.max_steps
 
         for _ in range(max_steps):
-            message = await self._call_model(messages, tool_schemas)
+            message = await self.client.complete(messages, tool_schemas, SYSTEM_PROMPT)
 
             text = _collect_text(message)
             if text:
                 builder.add_reasoning(text)
                 self.bus.publish("reasoning", text=text)
 
-            messages.append({"role": "assistant", "content": message.content})
-            tool_uses = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
+            messages.append(message)
+            tool_uses = [b for b in message["content"] if b.get("type") == "tool_use"]
 
             if not tool_uses:
                 # Agent stopped without calling finish_test → treat its text as the summary.
@@ -117,13 +118,14 @@ class AgentLoop:
 
             tool_result_blocks = []
             for block in tool_uses:
-                step = builder.add_tool_call(block.name, dict(block.input))
-                self.bus.publish("step", index=step.index, tool=block.name, input=block.input)
+                tool_input = dict(block["input"])
+                step = builder.add_tool_call(block["name"], tool_input)
+                self.bus.publish("step", index=step.index, tool=block["name"], input=tool_input)
 
-                outcome = await toolset.dispatch(block.name, dict(block.input))
+                outcome = await toolset.dispatch(block["name"], tool_input)
 
                 builder.add_tool_result(
-                    block.name, outcome.summary,
+                    block["name"], outcome.summary,
                     screenshot_path=outcome.screenshot_path,
                     error=outcome.summary if outcome.is_error else None,
                 )
@@ -145,39 +147,21 @@ class AgentLoop:
 
                 tool_result_blocks.append({
                     "type": "tool_result",
-                    "tool_use_id": block.id,
+                    "tool_use_id": block["id"],
                     "content": outcome.content_blocks,
                     "is_error": outcome.is_error,
                 })
 
                 if outcome.finished:
                     verdict = Verdict.PASS if outcome.verdict == "pass" else Verdict.FAIL
-                    return verdict, _finish_summary(block.input)
+                    return verdict, _finish_summary(tool_input)
 
             messages.append({"role": "user", "content": tool_result_blocks})
 
         return Verdict.ERROR, f"Reached max_steps ({max_steps}) without finishing the test."
 
-    async def _call_model(self, messages: list[dict[str, Any]], tool_schemas) -> Any:
-        """Stream one assistant turn, publishing text deltas, return the final message."""
-        kwargs: dict[str, Any] = {
-            "model": self.settings.model,
-            "max_tokens": self.settings.max_tokens,
-            "system": SYSTEM_PROMPT,
-            "tools": tool_schemas,
-            "messages": messages,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": self.settings.effort},
-        }
-        async with self.client.messages.stream(**kwargs) as stream:
-            async for _ in stream.text_stream:
-                # Text deltas are surfaced from the final message; iterate to drive the stream.
-                pass
-            return await stream.get_final_message()
-
-
-def _collect_text(message: Any) -> str:
-    parts = [b.text for b in message.content if getattr(b, "type", None) == "text"]
+def _collect_text(message: dict[str, Any]) -> str:
+    parts = [b.get("text", "") for b in message["content"] if b.get("type") == "text"]
     return "\n".join(p for p in parts if p).strip()
 
 

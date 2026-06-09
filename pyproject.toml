@@ -29,6 +29,9 @@ dev = [
     "ruff>=0.6",
     "httpx>=0.27",
 ]
+openai = [
+    "openai>=1.86",
+]
 
 [project.scripts]
 aiwebtest = "aiwebtest.main:run"

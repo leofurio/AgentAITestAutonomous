@@ -24,10 +24,15 @@ def test_yaml_values_loaded(tmp_path: Path, monkeypatch):
 
 
 def test_env_overrides_yaml(tmp_path: Path, monkeypatch):
-    cfg = _write_yaml(tmp_path, "model: claude-sonnet-4-6\nbrowser:\n  headless: false\n")
+    cfg = _write_yaml(
+        tmp_path,
+        "agent_provider: anthropic\nmodel: claude-sonnet-4-6\nbrowser:\n  headless: false\n",
+    )
+    monkeypatch.setenv("AIWEBTEST_AGENT_PROVIDER", "openai")
     monkeypatch.setenv("AIWEBTEST_MODEL", "claude-opus-4-8")
     monkeypatch.setenv("AIWEBTEST_BROWSER__HEADLESS", "true")
     settings = load_settings(cfg)
+    assert settings.agent_provider == "openai"
     assert settings.model == "claude-opus-4-8"
     assert settings.browser.headless is True
 

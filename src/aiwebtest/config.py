@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     _yaml_values: ClassVar[dict[str, Any]] = {}
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    agent_provider: str = "anthropic"
     model: str = "claude-opus-4-8"
     effort: str = "high"
     max_tokens: int = 8192

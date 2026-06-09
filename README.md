@@ -4,7 +4,8 @@ Describe a test in plain language through a chat UI — *which site, what to tes
 with which data* — and an AI agent drives a real browser to carry it out, verifies the
 expected outcomes, and produces a pass/fail report with screenshots and a full step log.
 
-- **Engine**: Claude (`claude-opus-4-8` by default) via a manual tool-use agentic loop.
+- **Engine**: provider-based agent loop. Anthropic Claude (`claude-opus-4-8`) is the
+  default; OpenAI Responses API function calling can be selected via configuration.
 - **Browser**: Playwright. The agent perceives pages via an accessibility/DOM snapshot with
   stable ref ids, and acts by ref — robust against brittle selectors.
 - **UI**: FastAPI + WebSocket streaming a live timeline (reasoning, steps, screenshots,
@@ -53,9 +54,28 @@ The end-to-end test drives the full loop against a local fixture site using a **
 ## Configuration
 
 `config/default.yaml` merged with environment variables (env wins). Nested overrides use
-`__`, e.g. `AIWEBTEST_BROWSER__HEADLESS=true`. Key settings: `model`, `effort`,
-`browser.headless`, `agent.max_steps`, `agent.allowed_domains` (empty = derived from the
-target URL; keeps the agent on the site under test).
+`__`, e.g. `AIWEBTEST_BROWSER__HEADLESS=true`. Key settings: `agent_provider`, `model`,
+`effort`, `browser.headless`, `agent.max_steps`, `agent.allowed_domains` (empty = derived
+from the target URL; keeps the agent on the site under test).
+
+### Provider selection
+
+Anthropic remains the default:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+AIWEBTEST_AGENT_PROVIDER=anthropic
+AIWEBTEST_MODEL=claude-opus-4-8
+```
+
+To use OpenAI for the agentic test generation loop:
+
+```bash
+pip install -e ".[openai]"
+OPENAI_API_KEY=sk-...
+AIWEBTEST_AGENT_PROVIDER=openai
+AIWEBTEST_MODEL=<openai-model>
+```
 
 ## Project layout
 
