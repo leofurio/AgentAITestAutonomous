@@ -6,6 +6,7 @@ from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
+from ..asyncio_compat import ensure_subprocess_event_loop
 from ..config import BrowserConfig
 
 
@@ -27,6 +28,7 @@ class BrowserSession:
         self.page: Page | None = None
 
     async def __aenter__(self) -> BrowserSession:
+        ensure_subprocess_event_loop()
         self._pw = await async_playwright().start()
         launch_kwargs: dict = {"headless": self._cfg.headless}
         if self._cfg.channel:

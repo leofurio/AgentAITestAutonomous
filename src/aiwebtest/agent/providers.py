@@ -99,6 +99,29 @@ class OpenAIAgentClient:
         ]
 
 
+@dataclass
+class OpenRouterAgentClient:
+    """Adapter for OpenRouter's OpenAI-compatible Chat Completions API."""
+
+    client: Any
+    settings: Settings
+
+    async def complete(
+        self,
+        messages: list[AgentMessage],
+        tool_schemas: list[dict[str, Any]],
+        system_prompt: str,
+    ) -> AgentMessage:
+        completion = await self.client.chat.completions.create(
+            model=self.settings.model,
+            messages=_to_openai_chat_messages(messages, system_prompt),
+            tools=[_to_openai_chat_tool(tool) for tool in tool_schemas],
+            tool_choice="auto",
+            max_tokens=self.settings.max_tokens,
+        )
+        return {"role": "assistant", "content": _normalize_openai_chat_completion(completion)}
+
+
 def ensure_agent_client(client: Any, settings: Settings) -> AgentClient:
     """Keep tests/custom factories compatible while preferring explicit adapters."""
     if hasattr(client, "complete"):
@@ -153,6 +176,42 @@ def _normalize_openai_output(response: Any) -> list[AgentBlock]:
     return blocks
 
 
+def _normalize_openai_chat_completion(completion: Any) -> list[AgentBlock]:
+    choices = getattr(completion, "choices", []) or []
+    if not choices:
+        return []
+
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return []
+
+    blocks: list[AgentBlock] = []
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content:
+        blocks.append({"type": "text", "text": content})
+    elif isinstance(content, list):
+        text = _chat_content_parts_to_text(content)
+        if text:
+            blocks.append({"type": "text", "text": text})
+
+    for tool_call in getattr(message, "tool_calls", []) or []:
+        function = getattr(tool_call, "function", None)
+        arguments = getattr(function, "arguments", "{}") or "{}"
+        try:
+            tool_input = json.loads(arguments)
+        except json.JSONDecodeError:
+            tool_input = {}
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": getattr(tool_call, "id", ""),
+                "name": getattr(function, "name", "") if function is not None else "",
+                "input": tool_input,
+            }
+        )
+    return blocks
+
+
 def _openai_message_text(item: Any) -> str:
     parts: list[str] = []
     for content in getattr(item, "content", []) or []:
@@ -170,6 +229,97 @@ def _to_openai_tool(tool: dict[str, Any]) -> dict[str, Any]:
         "description": tool.get("description", ""),
         "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
     }
+
+
+def _to_openai_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+        },
+    }
+
+
+def _to_openai_chat_messages(
+    messages: list[AgentMessage],
+    system_prompt: str,
+) -> list[dict[str, Any]]:
+    chat_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    for message in messages:
+        role = message["role"]
+        content = message["content"]
+
+        if role == "assistant":
+            chat_messages.append(_assistant_to_openai_chat_message(content))
+            continue
+
+        has_tool_result = isinstance(content, list) and any(
+            block.get("type") == "tool_result" for block in content
+        )
+        if has_tool_result:
+            chat_messages.extend(_tool_results_to_openai_chat_messages(content))
+        else:
+            chat_messages.append({"role": role, "content": _content_to_text(content)})
+    return chat_messages
+
+
+def _assistant_to_openai_chat_message(content: Any) -> dict[str, Any]:
+    if not isinstance(content, list):
+        return {"role": "assistant", "content": str(content)}
+
+    text = _blocks_to_text([block for block in content if block.get("type") == "text"])
+    tool_calls = []
+    for block in content:
+        if block.get("type") != "tool_use":
+            continue
+        tool_calls.append(
+            {
+                "id": block["id"],
+                "type": "function",
+                "function": {
+                    "name": block["name"],
+                    "arguments": json.dumps(block.get("input", {}), ensure_ascii=True),
+                },
+            }
+        )
+
+    chat_message: dict[str, Any] = {"role": "assistant", "content": text or None}
+    if tool_calls:
+        chat_message["tool_calls"] = tool_calls
+    return chat_message
+
+
+def _tool_results_to_openai_chat_messages(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": block["tool_use_id"],
+            "content": _blocks_to_text(block.get("content", [])),
+        }
+        for block in content
+        if block.get("type") == "tool_result"
+    ]
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _blocks_to_text(content)
+    return str(content)
+
+
+def _chat_content_parts_to_text(content: list[Any]) -> str:
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, dict):
+            if part.get("type") == "text":
+                parts.append(part.get("text", ""))
+        elif getattr(part, "type", None) == "text":
+            parts.append(getattr(part, "text", ""))
+    return "\n".join(p for p in parts if p).strip()
 
 
 def _blocks_to_text(blocks: list[dict[str, Any]]) -> str:

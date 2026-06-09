@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_settings import (
     BaseSettings,
@@ -77,6 +78,10 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = ""
+    openrouter_app_title: str = "aiwebtest"
     agent_provider: str = "anthropic"
     model: str = "claude-opus-4-8"
     effort: str = "high"
@@ -112,8 +117,12 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(fh) or {}
 
 
-def load_settings(config_path: Path | None = None) -> Settings:
+def load_settings(config_path: Path | None = None, dotenv_path: Path | None = None) -> Settings:
     """Build Settings, applying env > YAML file > defaults precedence."""
+    env_file = ROOT_DIR / ".env" if dotenv_path is None else dotenv_path
+    if env_file.exists():
+        load_dotenv(env_file, override=False)
+
     Settings._yaml_values = _load_yaml(config_path or DEFAULT_CONFIG_PATH)
     try:
         return Settings()

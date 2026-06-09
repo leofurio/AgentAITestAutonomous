@@ -5,7 +5,8 @@ with which data* — and an AI agent drives a real browser to carry it out, veri
 expected outcomes, and produces a pass/fail report with screenshots and a full step log.
 
 - **Engine**: provider-based agent loop. Anthropic Claude (`claude-opus-4-8`) is the
-  default; OpenAI Responses API function calling can be selected via configuration.
+  default; OpenAI Responses API or OpenRouter Chat Completions function calling can be
+  selected via configuration.
 - **Browser**: Playwright. The agent perceives pages via an accessibility/DOM snapshot with
   stable ref ids, and acts by ref — robust against brittle selectors.
 - **UI**: FastAPI + WebSocket streaming a live timeline (reasoning, steps, screenshots,
@@ -34,11 +35,14 @@ and recorded; any failed assertion forces an overall `fail`.
 pip install -e .
 playwright install chromium
 cp .env.example .env        # set ANTHROPIC_API_KEY
-uvicorn aiwebtest.main:app --reload
+aiwebtest
 ```
 
 Open http://localhost:8000, enter a target URL, an instruction and optional JSON data,
 then **Run Test**. `config/default.yaml` has `headless: false`, so the browser is visible.
+
+On Windows, prefer the `aiwebtest` entrypoint instead of `uvicorn --reload`: Playwright's
+async driver needs an event loop that supports subprocesses.
 
 ## Run tests (headless — CI / containers)
 
@@ -75,6 +79,22 @@ pip install -e ".[openai]"
 OPENAI_API_KEY=sk-...
 AIWEBTEST_AGENT_PROVIDER=openai
 AIWEBTEST_MODEL=<openai-model>
+```
+
+To use OpenRouter:
+
+```bash
+pip install -e ".[openai]"
+OPENROUTER_API_KEY=sk-or-...
+AIWEBTEST_AGENT_PROVIDER=openrouter
+AIWEBTEST_MODEL=~anthropic/claude-sonnet-latest
+```
+
+Optional OpenRouter attribution headers:
+
+```bash
+AIWEBTEST_OPENROUTER_HTTP_REFERER=http://localhost:8000
+AIWEBTEST_OPENROUTER_APP_TITLE=aiwebtest
 ```
 
 ## Project layout
