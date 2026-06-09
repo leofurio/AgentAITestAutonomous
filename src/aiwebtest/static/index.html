@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aiwebtest — Autonomous Web Testing</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="panel">
+      <h1>🧪 aiwebtest</h1>
+      <p class="hint">Describe what to test in plain language.</p>
+      <label>Target URL
+        <input id="target_url" type="text" placeholder="https://example.com/login">
+      </label>
+      <label>Instruction
+        <textarea id="instruction" rows="6"
+          placeholder="Open the login page, sign in with the provided credentials, and verify the dashboard shows the welcome message."></textarea>
+      </label>
+      <label>Test data (JSON, optional)
+        <textarea id="data" rows="4" placeholder='{ "username": "demo", "password": "secret" }'></textarea>
+      </label>
+      <button id="run">Run Test</button>
+      <div id="status" class="status idle">idle</div>
+    </aside>
+
+    <main class="timeline-wrap">
+      <div id="verdict" class="verdict hidden"></div>
+      <div id="timeline" class="timeline"></div>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

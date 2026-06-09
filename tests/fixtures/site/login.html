@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo App — Login</title>
+</head>
+<body>
+  <h1>Demo App</h1>
+
+  <div id="login-view">
+    <h2>Sign in</h2>
+    <form id="login-form">
+      <label>Username
+        <input type="text" name="username" id="username" placeholder="username">
+      </label>
+      <label>Password
+        <input type="password" name="password" id="password" placeholder="password">
+      </label>
+      <button type="submit" id="login-btn">Log in</button>
+    </form>
+    <p id="error" style="color:red; display:none;">Invalid credentials</p>
+  </div>
+
+  <div id="dashboard" style="display:none;">
+    <h2 id="welcome"></h2>
+    <ul id="items">
+      <li>Alpha</li>
+      <li>Beta</li>
+      <li>Gamma</li>
+    </ul>
+  </div>
+
+  <script>
+    document.getElementById("login-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const u = document.getElementById("username").value;
+      const p = document.getElementById("password").value;
+      if (u === "demo" && p === "secret") {
+        document.getElementById("login-view").style.display = "none";
+        document.getElementById("welcome").textContent = "Welcome, " + u + "!";
+        document.getElementById("dashboard").style.display = "block";
+      } else {
+        document.getElementById("error").style.display = "block";
+      }
+    });
+  </script>
+</body>
+</html>

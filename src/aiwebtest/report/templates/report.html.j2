@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Report — {{ report.run_id }}</title>
+  <style>
+    :root { --pass:#1a7f37; --fail:#cf222e; --error:#9a6700; --bg:#f6f8fa; --border:#d0d7de; }
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; color: #1f2328;
+           background: var(--bg); }
+    header { padding: 24px 32px; background: #fff; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; color: #fff;
+             font-weight: 700; text-transform: uppercase; font-size: 13px; }
+    .badge.pass { background: var(--pass); } .badge.fail { background: var(--fail); }
+    .badge.error { background: var(--error); }
+    .meta { color: #57606a; font-size: 14px; margin-top: 8px; }
+    main { padding: 24px 32px; max-width: 1000px; }
+    section { background: #fff; border: 1px solid var(--border); border-radius: 8px;
+              padding: 16px 20px; margin-bottom: 20px; }
+    h2 { font-size: 16px; margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border);
+             vertical-align: top; }
+    .ok { color: var(--pass); font-weight: 600; } .ko { color: var(--fail); font-weight: 600; }
+    .step { border-left: 3px solid var(--border); padding: 6px 12px; margin: 8px 0; }
+    .step.tool_call { border-color: #0969da; } .step.reasoning { border-color: #8250df; }
+    .step .tool { font-family: ui-monospace, monospace; font-weight: 600; }
+    .step .err { color: var(--fail); }
+    img.shot { max-width: 320px; border: 1px solid var(--border); border-radius: 6px;
+               margin-top: 6px; display: block; }
+    details { margin: 4px 0; } pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Test Report <span class="badge {{ report.verdict.value }}">{{ report.verdict.value }}</span></h1>
+    <div class="meta">
+      <strong>Instruction:</strong> {{ report.instruction }}<br>
+      {% if report.target_url %}<strong>Target:</strong> {{ report.target_url }}<br>{% endif %}
+      <strong>Model:</strong> {{ report.model }} &middot;
+      <strong>Run:</strong> {{ report.run_id }}<br>
+      <strong>Started:</strong> {{ report.started_at }}
+      {% if report.finished_at %}&middot; <strong>Finished:</strong> {{ report.finished_at }}{% endif %}
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Summary</h2>
+      <p>{{ report.summary or "(no summary)" }}</p>
+    </section>
+
+    <section>
+      <h2>Assertions ({{ report.assertions | length }})</h2>
+      {% if report.assertions %}
+      <table>
+        <thead><tr><th>Result</th><th>Description</th><th>Condition</th><th>Expected</th><th>Actual</th></tr></thead>
+        <tbody>
+        {% for a in report.assertions %}
+          <tr>
+            <td class="{{ 'ok' if a.passed else 'ko' }}">{{ 'PASS' if a.passed else 'FAIL' }}</td>
+            <td>{{ a.description }}</td>
+            <td>{{ a.condition }}</td>
+            <td>{{ a.expected if a.expected is not none else '—' }}</td>
+            <td>{{ a.actual if a.actual is not none else '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>No assertions were recorded.</p>{% endif %}
+    </section>
+
+    <section>
+      <h2>Steps ({{ report.steps | length }})</h2>
+      {% for s in report.steps %}
+        <div class="step {{ s.kind.value }}">
+          {% if s.kind.value == 'reasoning' %}
+            <details><summary>💭 reasoning</summary><pre>{{ s.text }}</pre></details>
+          {% elif s.kind.value == 'tool_call' %}
+            <span class="tool">→ {{ s.tool_name }}</span>
+            <pre>{{ s.tool_input | tojson }}</pre>
+          {% else %}
+            <span class="tool">{{ s.tool_name }}</span>: {{ s.result_summary }}
+            {% if s.error %}<div class="err">⚠ {{ s.error }}</div>{% endif %}
+            {% if s.screenshot_path %}
+              <img class="shot" src="screenshots/{{ basename(s.screenshot_path) }}" alt="screenshot">
+            {% endif %}
+          {% endif %}
+        </div>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

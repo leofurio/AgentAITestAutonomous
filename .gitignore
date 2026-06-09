@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Env
+.env
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+
+# Runtime artifacts
+runs/

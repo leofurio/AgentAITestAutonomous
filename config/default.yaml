@@ -1,0 +1,19 @@
+model: claude-opus-4-8
+effort: high
+max_tokens: 8192
+browser:
+  headless: false          # headful locally; override with AIWEBTEST_BROWSER__HEADLESS=true in CI
+  channel: chrome
+  viewport:
+    width: 1280
+    height: 800
+  nav_timeout_ms: 30000
+  action_timeout_ms: 10000
+agent:
+  max_steps: 40
+  max_retries: 2
+  include_screenshots: true   # vision on/off
+  allowed_domains: []         # empty = derived from target_url
+report:
+  output_dir: runs
+data: {}                      # default base test data merged into every run
