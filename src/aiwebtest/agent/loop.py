@@ -86,6 +86,8 @@ class AgentLoop:
             verdict=report.verdict.value,
             summary=report.summary,
             report_url=f"/api/runs/{self.run_id}/report.html",
+            playwright_url=f"/api/runs/{self.run_id}/playwright_test.py",
+            runner_url="/runner",
         )
         self.bus.publish("status", state="done")
         self.bus.close()

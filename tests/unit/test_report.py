@@ -32,6 +32,9 @@ def test_persist_writes_json_and_html(tmp_path: Path):
     assert len(data["steps"]) == 3
     html = paths["html"].read_text()
     assert "Demo App" in html and "pass" in html
+    playwright = paths["playwright"].read_text()
+    assert "async_playwright" in playwright
+    assert "https://example.com" in playwright
 
 
 def test_failing_assertion_forces_fail(tmp_path: Path):

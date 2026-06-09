@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -19,6 +22,19 @@ class RunRequest(BaseModel):
 
 class RunResponse(BaseModel):
     run_id: str
+
+
+class CodeRunRequest(BaseModel):
+    code: str
+    timeout_seconds: int = 120
+
+
+class CodeRunResponse(BaseModel):
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool
+    work_dir: str
 
 
 @router.post("/runs", response_model=RunResponse)
@@ -51,7 +67,53 @@ async def get_report_html(run_id: str, request: Request) -> FileResponse:
     return FileResponse(_artifact(request, run_id, "report.html"), media_type="text/html")
 
 
+@router.get("/runs/{run_id}/playwright_test.py")
+async def get_playwright_script(run_id: str, request: Request) -> FileResponse:
+    return FileResponse(
+        _artifact(request, run_id, "playwright_test.py"),
+        media_type="text/x-python",
+    )
+
+
 @router.get("/runs/{run_id}/screenshots/{filename}")
 async def get_screenshot(run_id: str, filename: str, request: Request) -> FileResponse:
     safe = Path(filename).name  # strip any directory components
     return FileResponse(_artifact(request, run_id, f"screenshots/{safe}"), media_type="image/png")
+
+
+@router.post("/playwright/execute", response_model=CodeRunResponse)
+async def execute_playwright_code(req: CodeRunRequest, request: Request) -> CodeRunResponse:
+    code = req.code.strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="code must not be empty")
+
+    timeout = max(1, min(req.timeout_seconds, 300))
+    manager = request.app.state.manager
+    run_id = f"manual_{uuid.uuid4().hex[:12]}"
+    work_dir = manager.settings.output_dir / run_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    script_path = work_dir / "pasted_playwright.py"
+    script_path.write_text(code, encoding="utf-8")
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script_path),
+        cwd=str(work_dir),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        timed_out = False
+    except TimeoutError:
+        proc.kill()
+        stdout, stderr = await proc.communicate()
+        timed_out = True
+
+    return CodeRunResponse(
+        exit_code=proc.returncode,
+        stdout=stdout.decode("utf-8", errors="replace"),
+        stderr=stderr.decode("utf-8", errors="replace"),
+        timed_out=timed_out,
+        work_dir=str(work_dir),
+    )

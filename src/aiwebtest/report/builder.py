@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..agent.schemas import AssertionResult, Step, StepKind, TestReport, Verdict
 from .html import render_html
+from .playwright_codegen import generate_playwright_script
 
 
 class ReportBuilder:
@@ -54,10 +55,12 @@ class ReportBuilder:
         return self.report
 
     def persist(self) -> dict[str, Path]:
-        """Write report.json and report.html into the run's output dir."""
+        """Write report artifacts into the run's output dir."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         json_path = self.output_dir / "report.json"
         html_path = self.output_dir / "report.html"
+        playwright_path = self.output_dir / "playwright_test.py"
         json_path.write_text(self.report.model_dump_json(indent=2), encoding="utf-8")
         html_path.write_text(render_html(self.report), encoding="utf-8")
-        return {"json": json_path, "html": html_path}
+        playwright_path.write_text(generate_playwright_script(self.report), encoding="utf-8")
+        return {"json": json_path, "html": html_path, "playwright": playwright_path}

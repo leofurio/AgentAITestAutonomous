@@ -12,6 +12,8 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
 - **UI**: FastAPI + WebSocket streaming a live timeline (reasoning, steps, screenshots,
   assertions) to a lightweight web frontend.
 - **Report**: structured JSON + standalone HTML per run.
+- **Replay**: every completed run also writes a standalone `playwright_test.py` script
+  that can be downloaded or pasted into the local runner at `/runner`.
 
 ## How it works
 
@@ -43,6 +45,10 @@ then **Run Test**. `config/default.yaml` has `headless: false`, so the browser i
 
 On Windows, prefer the `aiwebtest` entrypoint instead of `uvicorn --reload`: Playwright's
 async driver needs an event loop that supports subprocesses.
+
+After a run completes, use the `download Playwright code` link to save the generated
+script, or open `run code` to load it into `/runner`. The runner executes pasted Python
+code locally, so use it only for scripts you trust.
 
 ## Run tests (headless — CI / containers)
 

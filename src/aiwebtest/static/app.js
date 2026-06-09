@@ -75,6 +75,22 @@ function showVerdict(data) {
   link.target = "_blank";
   link.textContent = "(open full report)";
   verdictEl.appendChild(link);
+  if (data.playwright_url) {
+    verdictEl.appendChild(document.createTextNode(" "));
+    const codeLink = document.createElement("a");
+    codeLink.href = data.playwright_url;
+    codeLink.target = "_blank";
+    codeLink.textContent = "(download Playwright code)";
+    verdictEl.appendChild(codeLink);
+  }
+  if (data.runner_url && data.playwright_url) {
+    verdictEl.appendChild(document.createTextNode(" "));
+    const runnerLink = document.createElement("a");
+    runnerLink.href = `${data.runner_url}?script=${encodeURIComponent(data.playwright_url)}`;
+    runnerLink.target = "_blank";
+    runnerLink.textContent = "(run code)";
+    verdictEl.appendChild(runnerLink);
+  }
   verdictEl.classList.remove("hidden");
 }
 

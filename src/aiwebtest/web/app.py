@@ -91,6 +91,10 @@ def create_app(
     async def index() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
 
+    @app.get("/runner")
+    async def runner() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "runner.html")
+
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
