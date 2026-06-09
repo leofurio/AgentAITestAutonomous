@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from aiwebtest.asyncio_compat import configure_windows_event_loop_policy
 from aiwebtest.config import (
     AgentConfig,
     BrowserConfig,
@@ -16,6 +17,8 @@ from aiwebtest.config import (
     Settings,
     ViewportConfig,
 )
+
+configure_windows_event_loop_policy()
 
 FIXTURE_SITE = Path(__file__).parent / "fixtures" / "site"
 LOGIN_URL = (FIXTURE_SITE / "login.html").as_uri()

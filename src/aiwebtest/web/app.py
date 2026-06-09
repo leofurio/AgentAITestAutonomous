@@ -36,6 +36,30 @@ def _default_client_factory(settings: Settings) -> Callable[[], Any]:
                 kwargs["api_key"] = settings.openai_api_key
             return OpenAIAgentClient(AsyncOpenAI(**kwargs), settings)
 
+        if settings.agent_provider == "openrouter":
+            try:
+                from openai import AsyncOpenAI
+            except ImportError as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(
+                    "OpenRouter provider selected but the openai package is not installed. "
+                    'Install with: pip install -e ".[openai]"'
+                ) from exc
+
+            from ..agent.providers import OpenRouterAgentClient
+
+            default_headers = {}
+            if settings.openrouter_http_referer:
+                default_headers["HTTP-Referer"] = settings.openrouter_http_referer
+            if settings.openrouter_app_title:
+                default_headers["X-OpenRouter-Title"] = settings.openrouter_app_title
+
+            kwargs = {"base_url": settings.openrouter_base_url}
+            if settings.openrouter_api_key:
+                kwargs["api_key"] = settings.openrouter_api_key
+            if default_headers:
+                kwargs["default_headers"] = default_headers
+            return OpenRouterAgentClient(AsyncOpenAI(**kwargs), settings)
+
         if settings.agent_provider == "anthropic":
             from anthropic import AsyncAnthropic
 
