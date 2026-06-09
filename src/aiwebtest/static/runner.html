@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playwright Runner</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="runner-shell">
+    <header class="runner-header">
+      <div>
+        <h1>Playwright runner</h1>
+        <p class="hint">Paste a Python Playwright script and run it locally.</p>
+      </div>
+      <a class="side-link" href="/">Back to tests</a>
+    </header>
+
+    <section class="runner-grid">
+      <div class="runner-editor">
+        <label>Code
+          <textarea id="code" class="code-area" spellcheck="false"></textarea>
+        </label>
+        <div class="runner-controls">
+          <label>Timeout seconds
+            <input id="timeout" type="number" min="1" max="300" value="120">
+          </label>
+          <button id="execute">Run Code</button>
+        </div>
+        <div id="runner-status" class="status idle">idle</div>
+      </div>
+
+      <div class="runner-output">
+        <h2>Output</h2>
+        <label>stdout
+          <pre id="stdout" class="output-box"></pre>
+        </label>
+        <label>stderr
+          <pre id="stderr" class="output-box"></pre>
+        </label>
+      </div>
+    </section>
+  </div>
+  <script src="/static/runner.js"></script>
+</body>
+</html>
