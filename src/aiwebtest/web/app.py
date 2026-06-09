@@ -20,12 +20,31 @@ _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 def _default_client_factory(settings: Settings) -> Callable[[], Any]:
     def factory() -> Any:
-        from anthropic import AsyncAnthropic
+        if settings.agent_provider == "openai":
+            try:
+                from openai import AsyncOpenAI
+            except ImportError as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(
+                    "OpenAI provider selected but the openai package is not installed. "
+                    'Install with: pip install -e ".[openai]"'
+                ) from exc
 
-        kwargs = {}
-        if settings.anthropic_api_key:
-            kwargs["api_key"] = settings.anthropic_api_key
-        return AsyncAnthropic(**kwargs)
+            from ..agent.providers import OpenAIAgentClient
+
+            kwargs = {}
+            if settings.openai_api_key:
+                kwargs["api_key"] = settings.openai_api_key
+            return OpenAIAgentClient(AsyncOpenAI(**kwargs), settings)
+
+        if settings.agent_provider == "anthropic":
+            from anthropic import AsyncAnthropic
+
+            kwargs = {}
+            if settings.anthropic_api_key:
+                kwargs["api_key"] = settings.anthropic_api_key
+            return AsyncAnthropic(**kwargs)
+
+        raise ValueError(f"Unsupported agent provider: {settings.agent_provider}")
 
     return factory
 
