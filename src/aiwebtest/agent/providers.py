@@ -38,9 +38,14 @@ class AnthropicAgentClient:
         kwargs: dict[str, Any] = {
             "model": self.settings.model,
             "max_tokens": self.settings.max_tokens,
-            "system": system_prompt,
+            # Cache the stable tools+system prefix; top-level cache_control caches the
+            # growing conversation tail. On a multi-step run every turn after the first
+            # reads the prefix from cache instead of re-processing it — a large latency win.
+            "system": [
+                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
+            ],
             "tools": tool_schemas,
-            "messages": messages,
+            "messages": _with_cache_breakpoint(messages),
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": self.settings.effort},
         }
@@ -127,6 +132,24 @@ def ensure_agent_client(client: Any, settings: Settings) -> AgentClient:
     if hasattr(client, "complete"):
         return client
     return AnthropicAgentClient(client=client, settings=settings)
+
+
+def _with_cache_breakpoint(messages: list[AgentMessage]) -> list[AgentMessage]:
+    """Return a request copy with a cache breakpoint on the last conversation block.
+
+    Caching is a prefix match, so marking the latest block each turn caches the whole
+    conversation prefix; the next turn reads it back instead of re-processing history.
+    The stored history is left untouched (we copy only the final message/block).
+    """
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    if not isinstance(content, list) or not content:
+        return messages  # first user turn is a plain string — system cache still applies
+    new_content = list(content)
+    new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+    return [*messages[:-1], {**last, "content": new_content}]
 
 
 def _normalize_anthropic_blocks(blocks: list[Any]) -> list[AgentBlock]:

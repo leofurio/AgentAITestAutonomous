@@ -27,10 +27,24 @@ class BrowserSession:
         self._context: BrowserContext | None = None
         self.page: Page | None = None
 
+    def _launch_args(self) -> list[str]:
+        # Pure performance/stability flags: trim cold-start and stop Chromium from
+        # throttling timers/rendering when the window is backgrounded (common headful).
+        args = [
+            "--disable-dev-shm-usage",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-extensions",
+        ]
+        if self._cfg.headless:
+            args.append("--no-sandbox")
+        return args
+
     async def __aenter__(self) -> BrowserSession:
         ensure_subprocess_event_loop()
         self._pw = await async_playwright().start()
-        launch_kwargs: dict = {"headless": self._cfg.headless}
+        launch_kwargs: dict = {"headless": self._cfg.headless, "args": self._launch_args()}
         if self._cfg.channel:
             launch_kwargs["channel"] = self._cfg.channel
         try:

@@ -10,8 +10,33 @@ from aiwebtest.agent.providers import (
     OpenAIAgentClient,
     OpenRouterAgentClient,
     _normalize_anthropic_blocks,
+    _with_cache_breakpoint,
 )
 from aiwebtest.config import Settings
+
+
+def test_cache_breakpoint_marks_last_block_without_mutating_history():
+    messages = [
+        {"role": "user", "content": "open the page"},  # plain string — skipped
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": []},
+                {"type": "tool_result", "tool_use_id": "t2", "content": []},
+            ],
+        },
+    ]
+    out = _with_cache_breakpoint(messages)
+    # Last block of the last message gets the breakpoint...
+    assert out[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    # ...and the original history is untouched (no cache_control leaked in).
+    assert "cache_control" not in messages[-1]["content"][-1]
+
+
+def test_cache_breakpoint_skips_string_content():
+    messages = [{"role": "user", "content": "just text"}]
+    assert _with_cache_breakpoint(messages) == messages
 
 
 def test_anthropic_normalization_preserves_thinking_blocks():

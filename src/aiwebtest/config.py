@@ -87,7 +87,9 @@ class Settings(BaseSettings):
     code_runner_enabled: bool = True
     code_runner_allow_remote: bool = False
     model: str = "claude-opus-4-8"
-    effort: str = "high"
+    # medium balances speed and quality for browser-driving; raise to high/xhigh for
+    # harder sites, or lower to low for the fastest, simplest runs.
+    effort: str = "medium"
     max_tokens: int = 8192
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
