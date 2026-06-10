@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "aiwebtest"
     agent_provider: str = "anthropic"
+    # /api/playwright/execute runs arbitrary Python: keep it opt-out and local-only.
+    code_runner_enabled: bool = True
+    code_runner_allow_remote: bool = False
     model: str = "claude-opus-4-8"
     effort: str = "high"
     max_tokens: int = 8192

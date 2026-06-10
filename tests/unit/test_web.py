@@ -46,3 +46,17 @@ def test_execute_playwright_code_runs_python(settings):
     body = resp.json()
     assert body["exit_code"] == 0
     assert body["stdout"].strip() == "hello"
+
+
+def test_execute_rejected_when_code_runner_disabled(settings):
+    settings = settings.model_copy(update={"code_runner_enabled": False})
+    with _client(settings) as client:
+        resp = client.post("/api/playwright/execute", json={"code": "print('x')"})
+    assert resp.status_code == 403
+
+
+def test_traversal_run_id_is_404(settings):
+    with _client(settings) as client:
+        # %2e%2e decodes to ".." — must not escape the runs directory.
+        resp = client.get("/api/runs/%2e%2e/report.json")
+    assert resp.status_code == 404

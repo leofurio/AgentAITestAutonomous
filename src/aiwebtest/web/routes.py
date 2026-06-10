@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -12,6 +13,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api")
+
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Hosts considered local callers; "testclient" is Starlette's in-process TestClient.
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 class RunRequest(BaseModel):
@@ -47,12 +52,15 @@ async def create_run(req: RunRequest, request: Request) -> RunResponse:
 
 
 def _artifact(request: Request, run_id: str, name: str) -> Path:
+    # Reject run ids that could traverse out of the runs directory (e.g. "..").
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(status_code=404, detail="artifact not found")
     manager = request.app.state.manager
     run = manager.get(run_id)
-    base = run.run_dir if run else manager.settings.output_dir / run_id
+    base = (run.run_dir if run else manager.settings.output_dir / run_id).resolve()
     path = (base / name).resolve()
     # Prevent path traversal: the resolved path must stay inside the run dir.
-    if not str(path).startswith(str(base.resolve())) or not path.exists():
+    if not path.is_relative_to(base) or not path.exists():
         raise HTTPException(status_code=404, detail="artifact not found")
     return path
 
@@ -83,6 +91,19 @@ async def get_screenshot(run_id: str, filename: str, request: Request) -> FileRe
 
 @router.post("/playwright/execute", response_model=CodeRunResponse)
 async def execute_playwright_code(req: CodeRunRequest, request: Request) -> CodeRunResponse:
+    # This endpoint runs arbitrary Python on the host. Refuse unless enabled, and by
+    # default only accept calls from the local machine.
+    settings = request.app.state.settings
+    if not settings.code_runner_enabled:
+        raise HTTPException(status_code=403, detail="code runner is disabled")
+    client_host = request.client.host if request.client else None
+    if not settings.code_runner_allow_remote and client_host not in _LOCAL_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail="code runner only accepts local requests "
+            "(set code_runner_allow_remote to override)",
+        )
+
     code = req.code.strip()
     if not code:
         raise HTTPException(status_code=422, detail="code must not be empty")

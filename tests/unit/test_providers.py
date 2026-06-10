@@ -6,8 +6,32 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiwebtest.agent.providers import OpenAIAgentClient, OpenRouterAgentClient
+from aiwebtest.agent.providers import (
+    OpenAIAgentClient,
+    OpenRouterAgentClient,
+    _normalize_anthropic_blocks,
+)
 from aiwebtest.config import Settings
+
+
+def test_anthropic_normalization_preserves_thinking_blocks():
+    # Thinking blocks (with signature) must round-trip untouched: with adaptive
+    # thinking + tool use, the API rejects follow-up requests that drop them.
+    blocks = [
+        SimpleNamespace(type="thinking", thinking="plan the click", signature="sig123"),
+        SimpleNamespace(type="redacted_thinking", data="opaque"),
+        SimpleNamespace(type="text", text="Clicking the login button."),
+        SimpleNamespace(type="tool_use", id="toolu_1", name="click", input={"ref": "e1"}),
+    ]
+    normalized = _normalize_anthropic_blocks(blocks)
+    assert normalized[0] == {
+        "type": "thinking",
+        "thinking": "plan the click",
+        "signature": "sig123",
+    }
+    assert normalized[1] == {"type": "redacted_thinking", "data": "opaque"}
+    assert normalized[2]["type"] == "text"
+    assert normalized[3]["name"] == "click"
 
 
 class _FakeResponses:

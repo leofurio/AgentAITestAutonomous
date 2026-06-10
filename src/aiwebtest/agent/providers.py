@@ -135,6 +135,18 @@ def _normalize_anthropic_blocks(blocks: list[Any]) -> list[AgentBlock]:
         block_type = _get(block, "type")
         if block_type == "text":
             normalized.append({"type": "text", "text": _get(block, "text", "")})
+        elif block_type == "thinking":
+            # Thinking blocks (and their signature) must be echoed back verbatim in
+            # tool-use loops, or the API rejects the next request.
+            normalized.append(
+                {
+                    "type": "thinking",
+                    "thinking": _get(block, "thinking", ""),
+                    "signature": _get(block, "signature", ""),
+                }
+            )
+        elif block_type == "redacted_thinking":
+            normalized.append({"type": "redacted_thinking", "data": _get(block, "data", "")})
         elif block_type == "tool_use":
             normalized.append(
                 {

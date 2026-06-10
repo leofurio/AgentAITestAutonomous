@@ -1,4 +1,6 @@
 agent_provider: anthropic
+code_runner_enabled: true       # POST /api/playwright/execute (runs Python on this machine)
+code_runner_allow_remote: false # keep false: only local callers may use the code runner
 model: claude-opus-4-8
 effort: high
 max_tokens: 8192
