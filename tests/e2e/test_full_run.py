@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 
 import pytest
 
@@ -81,6 +83,38 @@ async def test_successful_login_run(settings, browser_page):
     assert types[-2:] == ["report", "status"]
     report_evt = next(e for e in events if e["type"] == "report")
     assert report_evt["data"]["verdict"] == "pass"
+
+
+async def test_generated_replay_script_runs(settings, browser_page):
+    # The generated playwright_test.py must actually replay the run on its own —
+    # this guards against the ephemeral-ref regression (refs wiped after re-render).
+    user, pwd, btn = await _discover_refs(browser_page)
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        tool_turn("get_page_snapshot", {}),
+        tool_turn("type_text", {"ref": user, "text": "demo"}),
+        tool_turn("type_text", {"ref": pwd, "text": "secret"}),
+        tool_turn("click", {"ref": btn}),
+        tool_turn("assert_that", {
+            "description": "welcome shown", "condition": "text_contains",
+            "expected": "Welcome, demo",
+        }),
+        tool_turn("finish_test", {"verdict": "pass", "summary": "ok"}),
+    ]
+    _report, _events, run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="replay")
+    script = run_dir / "playwright_test.py"
+    assert script.exists()
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(script),
+        cwd=str(run_dir),
+        env={**os.environ, "AIWEBTEST_REPLAY_HEADLESS": "1"},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    assert proc.returncode == 0, stderr.decode(errors="replace")
+    assert "PASS:" in stdout.decode(errors="replace")
 
 
 async def test_failed_assertion_yields_fail_verdict(settings, browser_page):

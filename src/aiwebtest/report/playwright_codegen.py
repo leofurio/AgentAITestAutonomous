@@ -84,6 +84,7 @@ def generate_playwright_script(report: TestReport) -> str:
         "from __future__ import annotations",
         "",
         "import asyncio",
+        "import os",
         "from pathlib import Path",
         "",
         "from playwright.async_api import async_playwright",
@@ -104,7 +105,15 @@ def generate_playwright_script(report: TestReport) -> str:
         "    return page.locator(f'[data-aiwebtest-ref=\"{ref}\"]')",
         "",
         "",
+        "async def tag(page):",
+        "    # Re-apply ref attributes to the live DOM. The ref ids are assigned by",
+        "    # SNAPSHOT_JS and wiped whenever the page re-renders or navigates, so we",
+        "    # refresh them right before each ref-based action to keep replay reliable.",
+        "    await page.evaluate(SNAPSHOT_JS)",
+        "",
+        "",
         "async def assert_that(page, condition, ref=None, expected=None, description=''):",
+        "    await tag(page)",
         "    if condition == 'visible':",
         "        if not ref:",
         "            raise AssertionError(f'{description}: no ref provided')",
@@ -135,7 +144,9 @@ def generate_playwright_script(report: TestReport) -> str:
         "",
         "async def main():",
         "    async with async_playwright() as pw:",
-        "        browser = await pw.chromium.launch(headless=False)",
+        "        # Headful by default; set AIWEBTEST_REPLAY_HEADLESS=1 to run headless.",
+        "        headless = os.environ.get('AIWEBTEST_REPLAY_HEADLESS', '') == '1'",
+        "        browser = await pw.chromium.launch(headless=headless)",
         "        context = await browser.new_context(viewport={'width': 1280, 'height': 800})",
         "        page = await context.new_page()",
         "        screenshots_dir = Path('generated_screenshots')",
@@ -173,9 +184,13 @@ def _render_steps(report: TestReport) -> list[str]:
         args = step.tool_input or {}
         tool = step.tool_name
         lines.append(f"print('tool: {tool}')")
+        # Refresh ref attributes on the current DOM before any ref-based action.
+        # assert_that refreshes them itself, so skip the duplicate there.
+        if args.get("ref") and tool != "assert_that":
+            lines.append("await tag(page)")
         if tool == "navigate":
             url = _py(args.get("url", ""))
-            lines.append(f"await page.goto({url}, wait_until='domcontentloaded')")
+            lines.append(f"await page.goto({url}, wait_until='load')")
         elif tool == "get_page_snapshot":
             lines.append("await snapshot(page)")
         elif tool == "click":
