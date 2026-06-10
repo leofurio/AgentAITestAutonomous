@@ -7,6 +7,7 @@ from pathlib import Path
 
 from aiwebtest.agent.schemas import AssertionResult, Verdict
 from aiwebtest.report.builder import ReportBuilder
+from aiwebtest.report.playwright_codegen import generate_playwright_script
 
 
 def _builder(tmp_path: Path) -> ReportBuilder:
@@ -43,3 +44,18 @@ def test_failing_assertion_forces_fail(tmp_path: Path):
                                     expected=None, actual="not visible", passed=False))
     report = b.finalize(Verdict.PASS, "agent thought it passed")  # declared pass
     assert report.verdict == Verdict.FAIL  # overridden by the failed assertion
+
+
+def test_playwright_replay_waits_for_refs_after_page_changes(tmp_path: Path):
+    b = _builder(tmp_path)
+    b.add_tool_call("click", {"ref": "e3"})
+    b.add_tool_call("click", {"ref": "e6"})
+    report = b.finalize(Verdict.PASS, "clicked through")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "import time" in script
+    assert "async def tag(page, expected_ref=None, timeout_ms=10000):" in script
+    assert "await tag(page, 'e6')" in script
+    assert "await settle(page)" in script

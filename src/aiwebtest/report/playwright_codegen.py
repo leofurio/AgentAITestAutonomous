@@ -85,6 +85,7 @@ def generate_playwright_script(report: TestReport) -> str:
         "",
         "import asyncio",
         "import os",
+        "import time",
         "from pathlib import Path",
         "",
         "from playwright.async_api import async_playwright",
@@ -105,15 +106,39 @@ def generate_playwright_script(report: TestReport) -> str:
         "    return page.locator(f'[data-aiwebtest-ref=\"{ref}\"]')",
         "",
         "",
-        "async def tag(page):",
+        "async def tag(page, expected_ref=None, timeout_ms=10000):",
         "    # Re-apply ref attributes to the live DOM. The ref ids are assigned by",
         "    # SNAPSHOT_JS and wiped whenever the page re-renders or navigates, so we",
         "    # refresh them right before each ref-based action to keep replay reliable.",
-        "    await page.evaluate(SNAPSHOT_JS)",
+        "    deadline = time.monotonic() + timeout_ms / 1000",
+        "    last_count = 0",
+        "    while True:",
+        "        elements = await page.evaluate(SNAPSHOT_JS)",
+        "        last_count = len(elements)",
+        "        if expected_ref is None or any(el.get('ref') == expected_ref for el in elements):",
+        "            return elements",
+        "        if time.monotonic() >= deadline:",
+        "            raise TimeoutError(",
+        "                f'Ref {expected_ref!r} did not appear after {timeout_ms}ms '",
+        "                f'({last_count} refs on {page.url})'",
+        "            )",
+        "        try:",
+        "            await page.wait_for_load_state('domcontentloaded', timeout=500)",
+        "        except Exception:",
+        "            pass",
+        "        await page.wait_for_timeout(100)",
+        "",
+        "",
+        "async def settle(page):",
+        "    try:",
+        "        await page.wait_for_load_state('domcontentloaded', timeout=1000)",
+        "    except Exception:",
+        "        pass",
+        "    await page.wait_for_timeout(100)",
         "",
         "",
         "async def assert_that(page, condition, ref=None, expected=None, description=''):",
-        "    await tag(page)",
+        "    await tag(page, ref)",
         "    if condition == 'visible':",
         "        if not ref:",
         "            raise AssertionError(f'{description}: no ref provided')",
@@ -187,7 +212,7 @@ def _render_steps(report: TestReport) -> list[str]:
         # Refresh ref attributes on the current DOM before any ref-based action.
         # assert_that refreshes them itself, so skip the duplicate there.
         if args.get("ref") and tool != "assert_that":
-            lines.append("await tag(page)")
+            lines.append(f"await tag(page, {_py(args.get('ref'))})")
         if tool == "navigate":
             url = _py(args.get("url", ""))
             lines.append(f"await page.goto({url}, wait_until='load')")
@@ -195,16 +220,20 @@ def _render_steps(report: TestReport) -> list[str]:
             lines.append("await snapshot(page)")
         elif tool == "click":
             lines.append(f"await by_ref(page, {_py(args.get('ref', ''))}).click()")
+            lines.append("await settle(page)")
         elif tool == "type_text":
             ref = _py(args.get("ref", ""))
             text = _py(args.get("text", ""))
             lines.append(f"await by_ref(page, {ref}).fill({text})")
             if args.get("submit"):
                 lines.append(f"await by_ref(page, {ref}).press('Enter')")
+                lines.append("await settle(page)")
         elif tool == "select_option":
             lines.extend(_select_option_lines(args))
+            lines.append("await settle(page)")
         elif tool == "press_key":
             lines.append(f"await page.keyboard.press({_py(args.get('key', ''))})")
+            lines.append("await settle(page)")
         elif tool == "wait_for":
             lines.extend(_wait_for_lines(args))
         elif tool == "screenshot":
