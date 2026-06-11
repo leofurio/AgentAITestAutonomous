@@ -122,6 +122,42 @@ async def test_generated_replay_script_runs(settings, browser_page):
     assert "PASS:" in stdout.decode(errors="replace")
 
 
+async def test_replay_continues_after_failed_assertion(settings, browser_page):
+    # A failed assertion must not abort the replay: like the live agent run, the
+    # remaining steps (including later assertions) still execute, and the script
+    # ends with a FAIL verdict and exit code 1.
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        tool_turn("get_page_snapshot", {}),
+        tool_turn("assert_that", {
+            "description": "text that does not exist", "condition": "text_contains",
+            "expected": "No such text on this page",
+        }),
+        tool_turn("assert_that", {
+            "description": "still on the login page", "condition": "url_contains",
+            "expected": "login",
+        }),
+        tool_turn("finish_test", {"verdict": "fail", "summary": "one check failed"}),
+    ]
+    _report, _events, run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="soft")
+    script = run_dir / "playwright_test.py"
+    assert script.exists()
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(script),
+        cwd=str(run_dir),
+        env={**os.environ, "AIWEBTEST_REPLAY_HEADLESS": "1"},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    out = stdout.decode(errors="replace")
+    assert proc.returncode == 1, stderr.decode(errors="replace")
+    assert "FAIL: text that does not exist" in out
+    assert "PASS: still on the login page" in out   # executed AFTER the failure
+    assert "REPLAY RESULT: FAIL - 1 of 2 assertion(s) failed" in out
+
+
 async def test_failed_assertion_yields_fail_verdict(settings, browser_page):
     user, pwd, btn = await _discover_refs(browser_page)
     turns = [

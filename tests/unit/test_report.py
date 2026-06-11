@@ -130,9 +130,28 @@ def test_playwright_replay_always_prints_a_verdict(tmp_path: Path):
     assert "current = note('step 2/2: click')" in script
     assert "TOTAL_STEPS = 2" in script
     assert "REPLAY RESULT: {outcome}" in script
-    assert "outcome = f'FAIL at {current} - {failure}'" in script
+    assert "elif FAILED_ASSERTIONS:" in script                 # failed assertions → fail verdict
     assert "raise SystemExit(1)" in script                     # exit code mirrors verdict
     assert "traceback.print_exc()" in script
+
+
+def test_playwright_replay_continues_after_a_failed_assertion(tmp_path: Path):
+    # The live agent records a failed assertion and keeps executing the remaining
+    # steps; the replay must do the same instead of aborting at the first failure
+    # with an AssertionError. The failure still forces the fail verdict + exit 1.
+    b = _builder(tmp_path)
+    b.add_tool_call("assert_that", {"condition": "text_contains", "expected": "missing",
+                                    "description": "first check"})
+    b.add_tool_call("assert_that", {"condition": "text_contains", "expected": "present",
+                                    "description": "second check"})
+    report = b.finalize(Verdict.FAIL, "one assertion failed")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "raise AssertionError" not in script                # soft assertions only
+    assert "FAILED_ASSERTIONS.append(description or condition)" in script
+    assert "if failure is not None or FAILED_ASSERTIONS:" in script  # exit code stays 1
 
 
 def test_playwright_replay_records_a_report_like_the_live_run(tmp_path: Path):
