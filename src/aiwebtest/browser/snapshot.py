@@ -73,6 +73,9 @@ _SNAPSHOT_JS = r"""
       role: role(el),
       name,
       value: (el.value !== undefined ? String(el.value) : '').slice(0, 80),
+      el_id: el.id || '',
+      attr_name: el.getAttribute('name') || '',
+      testid: el.getAttribute('data-testid') || '',
     });
   }
   return elements;
@@ -87,6 +90,20 @@ class SnapshotElement:
     role: str
     name: str
     value: str
+    el_id: str = ""
+    attr_name: str = ""
+    testid: str = ""
+
+    def locator_hint(self) -> dict[str, str]:
+        """A stable descriptor used to generate a robust replay locator."""
+        return {
+            "id": self.el_id,
+            "testid": self.testid,
+            "attr_name": self.attr_name,
+            "role": self.role,
+            "name": self.name,
+            "tag": self.tag,
+        }
 
 
 def ref_selector(ref: str) -> str:

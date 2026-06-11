@@ -126,6 +126,8 @@ class AgentLoop:
 
                 outcome = await toolset.dispatch(block["name"], tool_input)
 
+                if outcome.locator_hint:
+                    step.locator_hint = outcome.locator_hint
                 builder.add_tool_result(
                     block["name"], outcome.summary,
                     screenshot_path=outcome.screenshot_path,

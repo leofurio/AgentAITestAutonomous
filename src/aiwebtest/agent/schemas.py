@@ -44,6 +44,10 @@ class Step(BaseModel):
     text: str | None = None
     screenshot_path: str | None = None
     error: str | None = None
+    # Stable descriptor of the targeted element (id/name/role/text), captured at
+    # action time so the generated replay can use a robust locator instead of the
+    # ephemeral ordinal ref.
+    locator_hint: dict[str, Any] | None = None
     timestamp: datetime = Field(default_factory=_now)
 
 

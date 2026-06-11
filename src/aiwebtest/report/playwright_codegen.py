@@ -1,4 +1,11 @@
-"""Generate a standalone Playwright script from a completed aiwebtest report."""
+"""Generate a standalone Playwright script from a completed aiwebtest report.
+
+The script replays the recorded run without an AI model. Each action targets its
+element through a *stable* locator derived from the descriptor captured at run time
+(id, data-testid, name, role+accessible-name, or text) — falling back to the
+ephemeral ``data-aiwebtest-ref`` only when nothing stable is available. This makes
+replay robust across multi-page flows, where the ordinal ref ids are not stable.
+"""
 
 from __future__ import annotations
 
@@ -6,74 +13,86 @@ import json
 from typing import Any
 
 from ..agent.schemas import StepKind, TestReport
+from ..browser.snapshot import _SNAPSHOT_JS
 
-_SNAPSHOT_JS = r"""
-() => {
-  const REF_ATTR = 'data-aiwebtest-ref';
-  const INTERACTIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
-  const elements = [];
-  let counter = 0;
+# Runtime helpers embedded verbatim into the generated script.
+_HELPERS = f'''
+SNAPSHOT_JS = {json.dumps(_SNAPSHOT_JS)}
 
-  const isVisible = (el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-      return false;
-    }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  };
+# Map input types to ARIA roles for get_by_role fallback.
+ROLE_MAP = {{
+    "text": "textbox", "email": "textbox", "password": "textbox", "search": "textbox",
+    "tel": "textbox", "url": "textbox", "number": "spinbutton",
+    "checkbox": "checkbox", "radio": "radio",
+}}
+ROLE_OK = {{"button", "link", "heading", "textbox", "checkbox", "radio", "tab", "menuitem"}}
 
-  const accessibleName = (el) => {
-    const aria = el.getAttribute('aria-label');
-    if (aria) return aria.trim();
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-      if (el.labels && el.labels.length) return el.labels[0].textContent.trim();
-      const ph = el.getAttribute('placeholder');
-      if (ph) return ph.trim();
-      const name = el.getAttribute('name');
-      if (name) return name.trim();
-    }
-    const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
-    return text.slice(0, 120);
-  };
 
-  const role = (el) => {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit;
-    const tag = el.tagName;
-    if (tag === 'A') return 'link';
-    if (tag === 'BUTTON') return 'button';
-    if (tag === 'SELECT') return 'select';
-    if (tag === 'TEXTAREA') return 'textbox';
-    if (tag === 'INPUT') return (el.getAttribute('type') || 'text');
-    if (/^H[1-6]$/.test(tag)) return 'heading';
-    return tag.toLowerCase();
-  };
+async def snapshot(page):
+    elements = await page.evaluate(SNAPSHOT_JS)
+    print(f"Snapshot: {{len(elements)}} elements at {{page.url}}")
+    return elements
 
-  const candidates = document.querySelectorAll(
-    'a, button, input, select, textarea, [role="button"], [role="link"], [onclick], ' +
-    'h1, h2, h3, label, [data-testid]'
-  );
 
-  for (const el of candidates) {
-    if (!isVisible(el)) continue;
-    const name = accessibleName(el);
-    const interactive = INTERACTIVE.has(el.tagName) ||
-      el.hasAttribute('onclick') || ['button', 'link'].includes(el.getAttribute('role'));
-    if (!name && !interactive) continue;
-    const ref = 'e' + (++counter);
-    el.setAttribute(REF_ATTR, ref);
-    elements.push({
-      ref,
-      tag: el.tagName.toLowerCase(),
-      role: role(el),
-      name,
-      value: (el.value !== undefined ? String(el.value) : '').slice(0, 80),
-    });
-  }
-  return elements;
-}
-"""
+async def tag(page):
+    # Re-apply ref attributes so the ref fallback in resolve() can still match.
+    await page.evaluate(SNAPSHOT_JS)
+
+
+async def settle(page):
+    # Give the page a moment to finish a navigation / re-render before the next action.
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=2000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(150)
+
+
+def resolve(page, hint):
+    """Return a Playwright locator for a recorded element descriptor."""
+    hint = hint or {{}}
+    if hint.get("testid"):
+        return page.get_by_test_id(hint["testid"])
+    if hint.get("id"):
+        return page.locator(f'[id="{{hint["id"]}}"]')
+    if hint.get("attr_name") and hint.get("tag") in ("input", "select", "textarea"):
+        return page.locator(f'[name="{{hint["attr_name"]}}"]')
+    role = ROLE_MAP.get(hint.get("role"), hint.get("role"))
+    name = hint.get("name")
+    if role in ROLE_OK and name:
+        return page.get_by_role(role, name=name, exact=False).first
+    if name:
+        return page.get_by_text(name, exact=False).first
+    if hint.get("ref"):
+        return page.locator(f'[data-aiwebtest-ref="{{hint["ref"]}}"]')
+    raise RuntimeError(f"cannot resolve element from hint {{hint!r}}")
+
+
+async def assert_that(page, condition, target=None, expected=None, description=""):
+    await tag(page)
+    loc = resolve(page, target) if target else None
+    if condition == "visible":
+        if loc is None:
+            raise AssertionError(f"{{description}}: no target provided")
+        if not await loc.is_visible():
+            raise AssertionError(f"{{description}}: expected visible")
+    elif condition == "url_contains":
+        if (expected or "") not in page.url:
+            raise AssertionError(f"{{description}}: {{expected!r}} not in {{page.url!r}}")
+    elif condition == "text_contains":
+        actual = await (loc.inner_text() if loc else page.inner_text("body"))
+        if (expected or "") not in actual:
+            raise AssertionError(f"{{description}}: {{expected!r}} not found in {{actual[:500]!r}}")
+    elif condition == "value_equals":
+        if loc is None:
+            raise AssertionError(f"{{description}}: no target provided")
+        actual = await loc.input_value()
+        if actual != (expected or ""):
+            raise AssertionError(f"{{description}}: expected {{expected!r}}, got {{actual!r}}")
+    else:
+        raise AssertionError(f"{{description}}: unknown condition {{condition!r}}")
+    print(f"PASS: {{description or condition}}")
+'''
 
 
 def generate_playwright_script(report: TestReport) -> str:
@@ -85,86 +104,11 @@ def generate_playwright_script(report: TestReport) -> str:
         "",
         "import asyncio",
         "import os",
-        "import time",
         "from pathlib import Path",
         "",
         "from playwright.async_api import async_playwright",
         "",
-        f"SNAPSHOT_JS = {json.dumps(_SNAPSHOT_JS)}",
-        "",
-        "",
-        "async def snapshot(page):",
-        "    elements = await page.evaluate(SNAPSHOT_JS)",
-        "    print(f'Snapshot: {len(elements)} elements at {page.url}')",
-        "    for el in elements:",
-        "        name = f\" {el['name']!r}\" if el.get('name') else ''",
-        "        print(f\"  [ref={el['ref']}] {el['role']}{name}\")",
-        "    return elements",
-        "",
-        "",
-        "def by_ref(page, ref):",
-        "    return page.locator(f'[data-aiwebtest-ref=\"{ref}\"]')",
-        "",
-        "",
-        "async def tag(page, expected_ref=None, timeout_ms=10000):",
-        "    # Re-apply ref attributes to the live DOM. The ref ids are assigned by",
-        "    # SNAPSHOT_JS and wiped whenever the page re-renders or navigates, so we",
-        "    # refresh them right before each ref-based action to keep replay reliable.",
-        "    deadline = time.monotonic() + timeout_ms / 1000",
-        "    last_count = 0",
-        "    while True:",
-        "        elements = await page.evaluate(SNAPSHOT_JS)",
-        "        last_count = len(elements)",
-        "        if expected_ref is None or any(el.get('ref') == expected_ref for el in elements):",
-        "            return elements",
-        "        if time.monotonic() >= deadline:",
-        "            raise TimeoutError(",
-        "                f'Ref {expected_ref!r} did not appear after {timeout_ms}ms '",
-        "                f'({last_count} refs on {page.url})'",
-        "            )",
-        "        try:",
-        "            await page.wait_for_load_state('domcontentloaded', timeout=500)",
-        "        except Exception:",
-        "            pass",
-        "        await page.wait_for_timeout(100)",
-        "",
-        "",
-        "async def settle(page):",
-        "    try:",
-        "        await page.wait_for_load_state('domcontentloaded', timeout=1000)",
-        "    except Exception:",
-        "        pass",
-        "    await page.wait_for_timeout(100)",
-        "",
-        "",
-        "async def assert_that(page, condition, ref=None, expected=None, description=''):",
-        "    await tag(page, ref)",
-        "    if condition == 'visible':",
-        "        if not ref:",
-        "            raise AssertionError(f'{description}: no ref provided')",
-        "        actual = await by_ref(page, ref).is_visible()",
-        "        if not actual:",
-        "            raise AssertionError(f'{description}: expected visible')",
-        "    elif condition == 'url_contains':",
-        "        if (expected or '') not in page.url:",
-        "            raise AssertionError(f'{description}: {expected!r} not in {page.url!r}')",
-        "    elif condition == 'text_contains':",
-        "        if ref:",
-        "            actual = await by_ref(page, ref).inner_text()",
-        "        else:",
-        "            actual = await page.inner_text('body')",
-        "        if (expected or '') not in actual:",
-        "            preview = actual[:500]",
-        "            raise AssertionError(f'{description}: {expected!r} not found in {preview!r}')",
-        "    elif condition == 'value_equals':",
-        "        if not ref:",
-        "            raise AssertionError(f'{description}: no ref provided')",
-        "        actual = await by_ref(page, ref).input_value()",
-        "        if actual != (expected or ''):",
-        "            raise AssertionError(f'{description}: expected {expected!r}, got {actual!r}')",
-        "    else:",
-        "        raise AssertionError(f'{description}: unknown condition {condition!r}')",
-        "    print(f'PASS: {description or condition}')",
+        _HELPERS.strip("\n"),
         "",
         "",
         "async def main():",
@@ -200,6 +144,10 @@ def generate_playwright_script(report: TestReport) -> str:
     return "\n".join(lines)
 
 
+def _hint_for(step, ref: str) -> dict[str, Any]:
+    return {**(step.locator_hint or {}), "ref": ref}
+
+
 def _render_steps(report: TestReport) -> list[str]:
     lines: list[str] = []
     shot_index = 0
@@ -208,34 +156,34 @@ def _render_steps(report: TestReport) -> list[str]:
             continue
         args = step.tool_input or {}
         tool = step.tool_name
+        ref = args.get("ref")
+        hint = _hint_for(step, ref) if ref else None
         lines.append(f"print('tool: {tool}')")
-        # Refresh ref attributes on the current DOM before any ref-based action.
-        # assert_that refreshes them itself, so skip the duplicate there.
-        if args.get("ref") and tool != "assert_that":
-            lines.append(f"await tag(page, {_py(args.get('ref'))})")
+
         if tool == "navigate":
-            url = _py(args.get("url", ""))
-            lines.append(f"await page.goto({url}, wait_until='load')")
+            lines.append(f"await page.goto({_py(args.get('url', ''))}, wait_until='load')")
+            lines.append("await settle(page)")
         elif tool == "get_page_snapshot":
             lines.append("await snapshot(page)")
         elif tool == "click":
-            lines.append(f"await by_ref(page, {_py(args.get('ref', ''))}).click()")
+            lines.append("await tag(page)")
+            lines.append(f"await resolve(page, {_py(hint)}).click()")
+            # A click often navigates / re-renders; let the page settle before the next step.
             lines.append("await settle(page)")
         elif tool == "type_text":
-            ref = _py(args.get("ref", ""))
-            text = _py(args.get("text", ""))
-            lines.append(f"await by_ref(page, {ref}).fill({text})")
+            lines.append("await tag(page)")
+            lines.append(f"loc = resolve(page, {_py(hint)})")
+            lines.append(f"await loc.fill({_py(args.get('text', ''))})")
             if args.get("submit"):
-                lines.append(f"await by_ref(page, {ref}).press('Enter')")
+                lines.append("await loc.press('Enter')")
                 lines.append("await settle(page)")
         elif tool == "select_option":
-            lines.extend(_select_option_lines(args))
-            lines.append("await settle(page)")
+            lines.append("await tag(page)")
+            lines.extend(_select_option_lines(hint, args))
         elif tool == "press_key":
             lines.append(f"await page.keyboard.press({_py(args.get('key', ''))})")
-            lines.append("await settle(page)")
         elif tool == "wait_for":
-            lines.extend(_wait_for_lines(args))
+            lines.extend(_wait_for_lines(hint, args))
         elif tool == "screenshot":
             shot_index += 1
             lines.append(
@@ -244,15 +192,17 @@ def _render_steps(report: TestReport) -> list[str]:
                 f"full_page={bool(args.get('full_page', False))})"
             )
         elif tool == "get_text":
-            if args.get("ref"):
-                lines.append(f"print(await by_ref(page, {_py(args.get('ref'))}).inner_text())")
+            if ref:
+                lines.append("await tag(page)")
+                lines.append(f"print(await resolve(page, {_py(hint)}).inner_text())")
             else:
                 lines.append("print(await page.inner_text('body'))")
         elif tool == "assert_that":
+            target = _py(hint) if ref else "None"
             lines.append(
                 "await assert_that(page, "
                 f"condition={_py(args.get('condition', ''))}, "
-                f"ref={_py(args.get('ref'))}, "
+                f"target={target}, "
                 f"expected={_py(args.get('expected'))}, "
                 f"description={_py(args.get('description', ''))})"
             )
@@ -263,27 +213,28 @@ def _render_steps(report: TestReport) -> list[str]:
     return lines
 
 
-def _select_option_lines(args: dict[str, Any]) -> list[str]:
-    ref = _py(args.get("ref", ""))
+def _select_option_lines(hint: dict[str, Any] | None, args: dict[str, Any]) -> list[str]:
     value = _py(args.get("value", ""))
     return [
+        f"loc = resolve(page, {_py(hint)})",
         "try:",
-        f"    await by_ref(page, {ref}).select_option(value={value})",
+        f"    await loc.select_option(value={value})",
         "except Exception:",
-        f"    await by_ref(page, {ref}).select_option(label={value})",
+        f"    await loc.select_option(label={value})",
     ]
 
 
-def _wait_for_lines(args: dict[str, Any]) -> list[str]:
+def _wait_for_lines(hint: dict[str, Any] | None, args: dict[str, Any]) -> list[str]:
     state = args.get("state")
     timeout = int(args.get("timeout_ms", 10000))
     if state in {"visible", "hidden"}:
         return [
-            f"await by_ref(page, {_py(args.get('ref', ''))}).wait_for("
-            f"state={_py(state)}, timeout={timeout})"
+            "await tag(page)",
+            f"await resolve(page, {_py(hint)}).wait_for(state={_py(state)}, timeout={timeout})",
         ]
     return [
-        f"await page.get_by_text({_py(args.get('value', ''))}).first.wait_for(timeout={timeout})"
+        f"await page.get_by_text({_py(args.get('value', ''))}, exact=False)"
+        f".first.wait_for(timeout={timeout})"
     ]
 
 

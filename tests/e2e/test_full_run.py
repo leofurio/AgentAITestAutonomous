@@ -104,6 +104,11 @@ async def test_generated_replay_script_runs(settings, browser_page):
     _report, _events, run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="replay")
     script = run_dir / "playwright_test.py"
     assert script.exists()
+    # The fixture inputs/button carry ids, so the replay must carry stable id
+    # descriptors (resolve() turns them into [id="..."] at runtime) rather than
+    # relying on the ephemeral ordinal ref.
+    text = script.read_text()
+    assert "'id': 'username'" in text or "'id': 'login-btn'" in text
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable, str(script),

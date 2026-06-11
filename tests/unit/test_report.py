@@ -46,16 +46,22 @@ def test_failing_assertion_forces_fail(tmp_path: Path):
     assert report.verdict == Verdict.FAIL  # overridden by the failed assertion
 
 
-def test_playwright_replay_waits_for_refs_after_page_changes(tmp_path: Path):
+def test_playwright_replay_uses_stable_locators_and_settles(tmp_path: Path):
     b = _builder(tmp_path)
-    b.add_tool_call("click", {"ref": "e3"})
-    b.add_tool_call("click", {"ref": "e6"})
+    # A click with a captured descriptor must replay via a stable locator, not the
+    # ephemeral ordinal ref; clicks settle the page before the next step.
+    step = b.add_tool_call("click", {"ref": "e6"})
+    step.locator_hint = {
+        "id": "submit", "tag": "button", "role": "button",
+        "name": "Submit", "attr_name": "", "testid": "",
+    }
+    b.add_tool_call("click", {"ref": "e3"})  # no hint → ref fallback inside resolve()
     report = b.finalize(Verdict.PASS, "clicked through")
 
     script = generate_playwright_script(report)
 
     compile(script, "generated_replay.py", "exec")
-    assert "import time" in script
-    assert "async def tag(page, expected_ref=None, timeout_ms=10000):" in script
-    assert "await tag(page, 'e6')" in script
-    assert "await settle(page)" in script
+    assert "def resolve(page, hint):" in script
+    assert "'id': 'submit'" in script          # stable descriptor carried into the script
+    assert "await settle(page)" in script      # settle after clicks
+    assert "'ref': 'e3'" in script             # ref kept only as a fallback

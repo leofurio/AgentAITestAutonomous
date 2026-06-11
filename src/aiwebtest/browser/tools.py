@@ -17,7 +17,7 @@ from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from ..agent.schemas import AssertionResult
-from .snapshot import ref_selector, take_snapshot
+from .snapshot import SnapshotElement, ref_selector, take_snapshot
 
 # Anthropic tool definitions exposed to Claude.
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -169,6 +169,7 @@ class ToolOutcome:
     assertion: AssertionResult | None = None
     finished: bool = False
     verdict: str | None = None
+    locator_hint: dict[str, Any] | None = None
 
 
 class DomainGuardError(Exception):
@@ -188,6 +189,8 @@ class BrowserToolset:
         self.allowed_domains = [d.lower() for d in allowed_domains]
         self.include_screenshots = include_screenshots
         self._shot_counter = 0
+        # ref -> element descriptor from the most recent snapshot (for replay hints).
+        self._elements_by_ref: dict[str, SnapshotElement] = {}
 
     # -- dispatch ---------------------------------------------------------------
 
@@ -197,7 +200,7 @@ class BrowserToolset:
             return ToolOutcome(summary=f"Unknown tool '{name}'", is_error=True,
                                content_blocks=[_text(f"Unknown tool: {name}")])
         try:
-            return await handler(tool_input)
+            outcome = await handler(tool_input)
         except DomainGuardError as exc:
             return ToolOutcome(summary=str(exc), is_error=True, content_blocks=[_text(str(exc))])
         except (PlaywrightTimeout, PlaywrightError) as exc:
@@ -209,6 +212,14 @@ class BrowserToolset:
         except Exception as exc:  # noqa: BLE001 - tools must never crash the loop
             msg = f"Action '{name}' raised {type(exc).__name__}: {exc}"
             return ToolOutcome(summary=msg, is_error=True, content_blocks=[_text(msg)])
+
+        # Attach a stable locator descriptor for any ref-targeted action.
+        ref = tool_input.get("ref")
+        if ref and outcome.locator_hint is None:
+            el = self._elements_by_ref.get(ref)
+            if el is not None:
+                outcome.locator_hint = el.locator_hint()
+        return outcome
 
     # -- guardrail --------------------------------------------------------------
 
@@ -244,7 +255,8 @@ class BrowserToolset:
         )
 
     async def _tool_get_page_snapshot(self, args: dict[str, Any]) -> ToolOutcome:
-        outline, _ = await take_snapshot(self.page)
+        outline, elements = await take_snapshot(self.page)
+        self._elements_by_ref = {el.ref: el for el in elements}
         blocks = [_text(outline)]
         shot_path = None
         if args.get("include_screenshot") and self.include_screenshots:
