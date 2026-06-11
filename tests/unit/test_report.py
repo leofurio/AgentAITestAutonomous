@@ -110,3 +110,25 @@ def test_playwright_replay_launches_like_the_live_run(tmp_path: Path):
     # Without an explicit config the default channel ("chrome") is baked in.
     default_script = generate_playwright_script(report)
     assert "CHANNEL = 'chrome'" in default_script
+
+
+def test_playwright_replay_always_prints_a_verdict(tmp_path: Path):
+    # The replay must end with a visible REPLAY RESULT banner (and a matching
+    # exit code) whether it passes, fails mid-flow, or breaks during setup —
+    # otherwise a replay that stops early gives no outcome at all.
+    b = _builder(tmp_path)
+    b.add_tool_call("navigate", {"url": "https://example.com"})
+    step = b.add_tool_call("click", {"ref": "e1"})
+    step.locator_hint = {"id": "go", "tag": "button", "role": "button",
+                         "name": "Go", "attr_name": "", "testid": ""}
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "current = note('step 1/2: navigate')" in script   # numbered progress
+    assert "current = note('step 2/2: click')" in script
+    assert "REPLAY RESULT: PASS - 2 step(s) replayed, '" in script
+    assert "REPLAY RESULT: FAIL at {current}" in script
+    assert "raise SystemExit(1)" in script                     # exit code mirrors verdict
+    assert "traceback.print_exc()" in script

@@ -37,7 +37,7 @@ class BrowserConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    max_steps: int = 40
+    max_steps: int = 100
     max_retries: int = 2
     include_screenshots: bool = True
     allowed_domains: list[str] = Field(default_factory=list)
