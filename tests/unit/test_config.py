@@ -62,6 +62,6 @@ def test_dotenv_loaded_when_present(tmp_path: Path, monkeypatch):
 
 def test_defaults_when_absent(tmp_path: Path):
     settings = load_settings(tmp_path / "missing.yaml", dotenv_path=tmp_path / "missing.env")
-    assert settings.agent.max_steps == 40
+    assert settings.agent.max_steps == 100
     assert settings.effort == "medium"
 

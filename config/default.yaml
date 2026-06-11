@@ -13,7 +13,7 @@ browser:
   nav_timeout_ms: 30000
   action_timeout_ms: 10000
 agent:
-  max_steps: 40
+  max_steps: 100              # hard cap on agent tool calls per run; raise for long flows
   max_retries: 2
   include_screenshots: true   # vision on/off
   allowed_domains: []         # empty = derived from target_url
