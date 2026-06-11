@@ -61,10 +61,31 @@ def test_playwright_replay_uses_stable_locators_and_settles(tmp_path: Path):
     script = generate_playwright_script(report)
 
     compile(script, "generated_replay.py", "exec")
-    assert "def resolve(page, hint):" in script
+    assert "async def resolve(page, hint):" in script
     assert "'id': 'submit'" in script          # stable descriptor carried into the script
     assert "await settle(page)" in script      # settle after clicks
     assert "'ref': 'e3'" in script             # ref kept only as a fallback
+
+
+def test_playwright_replay_probes_locator_candidates(tmp_path: Path):
+    # Recorded descriptors are hints, not ground truth: e.g. the snapshot labels
+    # every <a> as role "link", but an <a> without href has no ARIA link role, so
+    # get_by_role would never match. The replay must probe a candidate chain
+    # (testid/id/name/role/tag+text/text/ref) and use the first that exists.
+    b = _builder(tmp_path)
+    step = b.add_tool_call("click", {"ref": "e2"})
+    step.locator_hint = {
+        "id": "", "tag": "a", "role": "link", "name": "1", "attr_name": "", "testid": "",
+    }
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "def _candidates(page, hint):" in script
+    assert ":has-text(" in script              # tag + visible-text fallback
+    assert "await loc.count() > 0" in script   # candidates are probed for existence
+    assert "loc = await resolve(page," in script
 
 
 def test_playwright_replay_launches_like_the_live_run(tmp_path: Path):

@@ -49,29 +49,58 @@ async def settle(page):
     await page.wait_for_timeout(150)
 
 
-def resolve(page, hint):
-    """Return a Playwright locator for a recorded element descriptor."""
-    hint = hint or {{}}
+def _candidates(page, hint):
+    """Ordered locator candidates for a recorded element descriptor."""
+    out = []
     if hint.get("testid"):
-        return page.get_by_test_id(hint["testid"])
+        out.append(page.get_by_test_id(hint["testid"]))
     if hint.get("id"):
-        return page.locator(f'[id="{{hint["id"]}}"]')
+        out.append(page.locator(f'[id="{{hint["id"]}}"]'))
     if hint.get("attr_name") and hint.get("tag") in ("input", "select", "textarea"):
-        return page.locator(f'[name="{{hint["attr_name"]}}"]')
+        out.append(page.locator(f'[name="{{hint["attr_name"]}}"]'))
     role = ROLE_MAP.get(hint.get("role"), hint.get("role"))
     name = hint.get("name")
     if role in ROLE_OK and name:
-        return page.get_by_role(role, name=name, exact=False).first
+        out.append(page.get_by_role(role, name=name, exact=False).first)
+    if name and hint.get("tag"):
+        # The recorded role can disagree with the live ARIA role (e.g. an <a>
+        # without href is not a "link"), so tag + visible text is tried too.
+        safe = name.replace('"', '\\\\"')
+        out.append(page.locator(f'{{hint["tag"]}}:has-text("{{safe}}")').first)
     if name:
-        return page.get_by_text(name, exact=False).first
+        out.append(page.get_by_text(name, exact=False).first)
     if hint.get("ref"):
-        return page.locator(f'[data-aiwebtest-ref="{{hint["ref"]}}"]')
-    raise RuntimeError(f"cannot resolve element from hint {{hint!r}}")
+        out.append(page.locator(f'[data-aiwebtest-ref="{{hint["ref"]}}"]'))
+    return out
+
+
+async def resolve(page, hint):
+    """Return the first candidate locator that matches something on the page.
+
+    The recorded descriptor is only a hint: probing the candidates instead of
+    trusting the strongest one blindly keeps replay working when a recorded
+    field does not match the live page (stale id, ARIA role mismatch, ...).
+    """
+    candidates = _candidates(page, hint or {{}})
+    if not candidates:
+        raise RuntimeError(f"cannot resolve element from hint {{hint!r}}")
+    deadline = time.monotonic() + ACTION_TIMEOUT_MS / 1000
+    while True:
+        for loc in candidates:
+            try:
+                if await loc.count() > 0:
+                    return loc
+            except Exception:
+                continue
+        if time.monotonic() >= deadline:
+            # Let the strongest candidate raise the actionable timeout error.
+            return candidates[0]
+        await page.wait_for_timeout(200)
 
 
 async def assert_that(page, condition, target=None, expected=None, description=""):
     await tag(page)
-    loc = resolve(page, target) if target else None
+    loc = await resolve(page, target) if target else None
     if condition == "visible":
         if loc is None:
             raise AssertionError(f"{{description}}: no target provided")
@@ -112,15 +141,16 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
         "",
         "import asyncio",
         "import os",
+        "import time",
         "from pathlib import Path",
         "",
         "from playwright.async_api import async_playwright",
         "",
+        "# Settings of the recorded run.",
+        f"CHANNEL = {cfg.channel!r}  # override with AIWEBTEST_REPLAY_CHANNEL",
+        f"ACTION_TIMEOUT_MS = {cfg.action_timeout_ms}",
+        "",
         _HELPERS.strip("\n"),
-        "",
-        "",
-        "# Browser channel of the recorded run (override with AIWEBTEST_REPLAY_CHANNEL).",
-        f"CHANNEL = {cfg.channel!r}",
         "",
         "",
         "async def launch_browser(pw, headless):",
@@ -203,12 +233,13 @@ def _render_steps(report: TestReport) -> list[str]:
             lines.append("await snapshot(page)")
         elif tool == "click":
             lines.append("await tag(page)")
-            lines.append(f"await resolve(page, {_py(hint)}).click()")
+            lines.append(f"loc = await resolve(page, {_py(hint)})")
+            lines.append("await loc.click()")
             # A click often navigates / re-renders; let the page settle before the next step.
             lines.append("await settle(page)")
         elif tool == "type_text":
             lines.append("await tag(page)")
-            lines.append(f"loc = resolve(page, {_py(hint)})")
+            lines.append(f"loc = await resolve(page, {_py(hint)})")
             lines.append(f"await loc.fill({_py(args.get('text', ''))})")
             if args.get("submit"):
                 lines.append("await loc.press('Enter')")
@@ -230,7 +261,8 @@ def _render_steps(report: TestReport) -> list[str]:
         elif tool == "get_text":
             if ref:
                 lines.append("await tag(page)")
-                lines.append(f"print(await resolve(page, {_py(hint)}).inner_text())")
+                lines.append(f"loc = await resolve(page, {_py(hint)})")
+                lines.append("print(await loc.inner_text())")
             else:
                 lines.append("print(await page.inner_text('body'))")
         elif tool == "assert_that":
@@ -252,7 +284,7 @@ def _render_steps(report: TestReport) -> list[str]:
 def _select_option_lines(hint: dict[str, Any] | None, args: dict[str, Any]) -> list[str]:
     value = _py(args.get("value", ""))
     return [
-        f"loc = resolve(page, {_py(hint)})",
+        f"loc = await resolve(page, {_py(hint)})",
         "try:",
         f"    await loc.select_option(value={value})",
         "except Exception:",
@@ -266,7 +298,8 @@ def _wait_for_lines(hint: dict[str, Any] | None, args: dict[str, Any]) -> list[s
     if state in {"visible", "hidden"}:
         return [
             "await tag(page)",
-            f"await resolve(page, {_py(hint)}).wait_for(state={_py(state)}, timeout={timeout})",
+            f"loc = await resolve(page, {_py(hint)})",
+            f"await loc.wait_for(state={_py(state)}, timeout={timeout})",
         ]
     return [
         f"await page.get_by_text({_py(args.get('value', ''))}, exact=False)"
