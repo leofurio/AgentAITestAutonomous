@@ -13,7 +13,10 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
   assertions) to a lightweight web frontend.
 - **Report**: structured JSON + standalone HTML per run.
 - **Replay**: every completed run also writes a standalone `playwright_test.py` script
-  that can be downloaded or pasted into the local runner at `/runner`.
+  that can be downloaded or pasted into the local runner at `/runner`. It launches the
+  same browser channel as the live run (e.g. installed Chrome) and falls back to the
+  bundled Chromium; override with `AIWEBTEST_REPLAY_CHANNEL`, run headless with
+  `AIWEBTEST_REPLAY_HEADLESS=1`.
 
 ## How it works
 

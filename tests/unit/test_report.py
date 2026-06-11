@@ -65,3 +65,27 @@ def test_playwright_replay_uses_stable_locators_and_settles(tmp_path: Path):
     assert "'id': 'submit'" in script          # stable descriptor carried into the script
     assert "await settle(page)" in script      # settle after clicks
     assert "'ref': 'e3'" in script             # ref kept only as a fallback
+
+
+def test_playwright_replay_launches_like_the_live_run(tmp_path: Path):
+    # The replay must use the same browser channel as the recorded run (e.g. the
+    # installed Chrome) and fall back to the bundled Chromium, mirroring
+    # BrowserSession. Otherwise replay fails on machines that never ran
+    # `playwright install` with "Executable doesn't exist".
+    from aiwebtest.config import BrowserConfig
+
+    b = _builder(tmp_path)
+    b.add_tool_call("navigate", {"url": "https://example.com"})
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report, browser=BrowserConfig(channel="msedge"))
+
+    compile(script, "generated_replay.py", "exec")
+    assert "CHANNEL = 'msedge'" in script
+    assert "async def launch_browser(pw, headless):" in script
+    assert "playwright install chromium" in script   # actionable error message
+    assert "context.set_default_timeout(10000)" in script
+
+    # Without an explicit config the default channel ("chrome") is baked in.
+    default_script = generate_playwright_script(report)
+    assert "CHANNEL = 'chrome'" in default_script
