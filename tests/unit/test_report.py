@@ -128,7 +128,29 @@ def test_playwright_replay_always_prints_a_verdict(tmp_path: Path):
     compile(script, "generated_replay.py", "exec")
     assert "current = note('step 1/2: navigate')" in script   # numbered progress
     assert "current = note('step 2/2: click')" in script
-    assert "REPLAY RESULT: PASS - 2 step(s) replayed, '" in script
-    assert "REPLAY RESULT: FAIL at {current}" in script
+    assert "TOTAL_STEPS = 2" in script
+    assert "REPLAY RESULT: {outcome}" in script
+    assert "outcome = f'FAIL at {current} - {failure}'" in script
     assert "raise SystemExit(1)" in script                     # exit code mirrors verdict
     assert "traceback.print_exc()" in script
+
+
+def test_playwright_replay_records_a_report_like_the_live_run(tmp_path: Path):
+    # The replay must produce the same artifacts as the autonomous run
+    # (report.json + report.html + assertion screenshots) by recording every
+    # step into the locally installed aiwebtest ReportBuilder.
+    b = _builder(tmp_path)
+    b.add_tool_call("navigate", {"url": "https://example.com"})
+    b.add_tool_call("assert_that", {"condition": "url_contains", "expected": "example",
+                                    "description": "landed"})
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "class Recorder:" in script
+    assert "from aiwebtest.report.builder import ReportBuilder" in script
+    assert "REC.tool_call('navigate'" in script        # steps mirrored into the report
+    assert "REC.assertion(" in script                  # assertions recorded with screenshot
+    assert "artifacts = REC.finalize(verdict, outcome)" in script
+    assert "never overwrite the original run's artifacts" in script

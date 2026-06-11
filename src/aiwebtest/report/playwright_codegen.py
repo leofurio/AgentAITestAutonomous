@@ -5,6 +5,11 @@ element through a *stable* locator derived from the descriptor captured at run t
 (id, data-testid, name, role+accessible-name, or text) — falling back to the
 ephemeral ``data-aiwebtest-ref`` only when nothing stable is available. This makes
 replay robust across multi-page flows, where the ordinal ref ids are not stable.
+
+The replay also produces the same artifacts as a live run — ``report.json`` and
+``report.html`` (plus assertion screenshots) — by recording every step into a
+``ReportBuilder`` from the locally installed aiwebtest package. When the package
+is not importable the replay still works and only prints to stdout.
 """
 
 from __future__ import annotations
@@ -16,19 +21,23 @@ from ..agent.schemas import StepKind, TestReport
 from ..browser.snapshot import _SNAPSHOT_JS
 from ..config import BrowserConfig
 
-# Runtime helpers embedded verbatim into the generated script.
-_HELPERS = f'''
-SNAPSHOT_JS = {json.dumps(_SNAPSHOT_JS)}
+# Runtime helpers embedded verbatim into the generated script. Only the first
+# line interpolates anything; the body is a plain string so braces stay single.
+_HELPERS_PREFIX = f"SNAPSHOT_JS = {json.dumps(_SNAPSHOT_JS)}"
 
+_HELPERS_BODY = '''
 # Map input types to ARIA roles for get_by_role fallback.
-ROLE_MAP = {{
+ROLE_MAP = {
     "text": "textbox", "email": "textbox", "password": "textbox", "search": "textbox",
     "tel": "textbox", "url": "textbox", "number": "spinbutton",
     "checkbox": "checkbox", "radio": "radio",
-}}
-ROLE_OK = {{"button", "link", "heading", "textbox", "checkbox", "radio", "tab", "menuitem"}}
+}
+ROLE_OK = {"button", "link", "heading", "textbox", "checkbox", "radio", "tab", "menuitem"}
 
-PASSED_ASSERTIONS = 0  # incremented by assert_that; reported in the final summary
+PASSED_ASSERTIONS = 0     # incremented by assert_that; reported in the final summary
+REC = None                # Recorder instance, created in main()
+SHOT_DIR = Path('screenshots')
+_shot_counter = 0
 
 
 def note(message):
@@ -36,9 +45,74 @@ def note(message):
     return message
 
 
+def next_shot_path():
+    global _shot_counter
+    _shot_counter += 1
+    SHOT_DIR.mkdir(parents=True, exist_ok=True)
+    return str(SHOT_DIR / f'shot_{_shot_counter:03d}.png')
+
+
+class Recorder:
+    """Writes the same report.json / report.html artifacts as a live run.
+
+    Best effort: uses the locally installed aiwebtest package; when it is not
+    importable the replay still runs and only prints to stdout.
+    """
+
+    def __init__(self):
+        self._builder = None
+        self._schemas = None
+        self._last_tool = None
+        out = Path.cwd()
+        if (out / 'report.json').exists():
+            out = out / 'replay'  # never overwrite the original run's artifacts
+        self.output_dir = out
+        try:
+            from aiwebtest.agent import schemas
+            from aiwebtest.report.builder import ReportBuilder
+        except ImportError:
+            print('note: aiwebtest is not importable; skipping report.json/report.html')
+            return
+        self._schemas = schemas
+        self._builder = ReportBuilder(
+            run_id=out.name, instruction=INSTRUCTION, model='replay',
+            target_url=TARGET_URL, output_dir=out,
+        )
+
+    def tool_call(self, name, args, hint=None):
+        self._last_tool = name
+        if self._builder:
+            step = self._builder.add_tool_call(name, dict(args))
+            step.locator_hint = hint
+
+    def tool_result(self, summary, screenshot_path=None):
+        if self._builder and self._last_tool:
+            self._builder.add_tool_result(self._last_tool, summary,
+                                          screenshot_path=screenshot_path)
+
+    def fail(self, error):
+        if self._builder:
+            self._builder.add_tool_result(self._last_tool or 'replay',
+                                          'Step failed', error=error)
+
+    def assertion(self, description, condition, expected, actual, passed, shot):
+        if self._builder:
+            self._builder.add_assertion(self._schemas.AssertionResult(
+                description=description, condition=condition, expected=expected,
+                actual=str(actual)[:500], passed=passed, screenshot_path=shot,
+            ))
+
+    def finalize(self, verdict, summary):
+        """Persist report.json/report.html; returns their paths (or None)."""
+        if not self._builder:
+            return None
+        self._builder.finalize(self._schemas.Verdict(verdict), summary)
+        return self._builder.persist()
+
+
 async def snapshot(page):
     elements = await page.evaluate(SNAPSHOT_JS)
-    print(f"Snapshot: {{len(elements)}} elements at {{page.url}}")
+    print(f"Snapshot: {len(elements)} elements at {page.url}")
     return elements
 
 
@@ -62,9 +136,9 @@ def _candidates(page, hint):
     if hint.get("testid"):
         out.append(page.get_by_test_id(hint["testid"]))
     if hint.get("id"):
-        out.append(page.locator(f'[id="{{hint["id"]}}"]'))
+        out.append(page.locator(f'[id="{hint["id"]}"]'))
     if hint.get("attr_name") and hint.get("tag") in ("input", "select", "textarea"):
-        out.append(page.locator(f'[name="{{hint["attr_name"]}}"]'))
+        out.append(page.locator(f'[name="{hint["attr_name"]}"]'))
     role = ROLE_MAP.get(hint.get("role"), hint.get("role"))
     name = hint.get("name")
     if role in ROLE_OK and name:
@@ -73,11 +147,11 @@ def _candidates(page, hint):
         # The recorded role can disagree with the live ARIA role (e.g. an <a>
         # without href is not a "link"), so tag + visible text is tried too.
         safe = name.replace('"', '\\\\"')
-        out.append(page.locator(f'{{hint["tag"]}}:has-text("{{safe}}")').first)
+        out.append(page.locator(f'{hint["tag"]}:has-text("{safe}")').first)
     if name:
         out.append(page.get_by_text(name, exact=False).first)
     if hint.get("ref"):
-        out.append(page.locator(f'[data-aiwebtest-ref="{{hint["ref"]}}"]'))
+        out.append(page.locator(f'[data-aiwebtest-ref="{hint["ref"]}"]'))
     return out
 
 
@@ -88,9 +162,9 @@ async def resolve(page, hint):
     trusting the strongest one blindly keeps replay working when a recorded
     field does not match the live page (stale id, ARIA role mismatch, ...).
     """
-    candidates = _candidates(page, hint or {{}})
+    candidates = _candidates(page, hint or {})
     if not candidates:
-        raise RuntimeError(f"cannot resolve element from hint {{hint!r}}")
+        raise RuntimeError(f"cannot resolve element from hint {hint!r}")
     deadline = time.monotonic() + ACTION_TIMEOUT_MS / 1000
     while True:
         for loc in candidates:
@@ -105,32 +179,49 @@ async def resolve(page, hint):
         await page.wait_for_timeout(200)
 
 
+async def _evaluate_assertion(page, loc, condition, expected):
+    """Mirror of the live run's assertion evaluation: returns (passed, actual)."""
+    if condition == "visible":
+        if loc is None:
+            return False, "no target provided"
+        visible = await loc.is_visible()
+        return visible, "visible" if visible else "not visible"
+    if condition == "url_contains":
+        return (expected or "") in page.url, page.url
+    if condition == "text_contains":
+        actual = await (loc.inner_text() if loc else page.inner_text("body"))
+        actual = actual.strip()
+        return (expected or "") in actual, actual[:500]
+    if condition == "value_equals":
+        if loc is None:
+            return False, "no target provided"
+        actual = await loc.input_value()
+        return actual == (expected or ""), actual
+    return False, f"unknown condition {condition!r}"
+
+
 async def assert_that(page, condition, target=None, expected=None, description=""):
     global PASSED_ASSERTIONS
     await tag(page)
     loc = await resolve(page, target) if target else None
-    if condition == "visible":
-        if loc is None:
-            raise AssertionError(f"{{description}}: no target provided")
-        if not await loc.is_visible():
-            raise AssertionError(f"{{description}}: expected visible")
-    elif condition == "url_contains":
-        if (expected or "") not in page.url:
-            raise AssertionError(f"{{description}}: {{expected!r}} not in {{page.url!r}}")
-    elif condition == "text_contains":
-        actual = await (loc.inner_text() if loc else page.inner_text("body"))
-        if (expected or "") not in actual:
-            raise AssertionError(f"{{description}}: {{expected!r}} not found in {{actual[:500]!r}}")
-    elif condition == "value_equals":
-        if loc is None:
-            raise AssertionError(f"{{description}}: no target provided")
-        actual = await loc.input_value()
-        if actual != (expected or ""):
-            raise AssertionError(f"{{description}}: expected {{expected!r}}, got {{actual!r}}")
-    else:
-        raise AssertionError(f"{{description}}: unknown condition {{condition!r}}")
+    passed, actual = await _evaluate_assertion(page, loc, condition, expected)
+    shot = None
+    try:
+        shot = next_shot_path()
+        await page.screenshot(path=shot)
+    except Exception:
+        shot = None
+    if REC:
+        REC.assertion(description, condition, expected, actual, passed, shot)
+    if not passed:
+        raise AssertionError(
+            f"{description}: {condition} failed (expected {expected!r}, actual {actual!r})"
+        )
     PASSED_ASSERTIONS += 1
-    print(f"PASS: {{description or condition}}")
+    msg = f"PASS: {description or condition}"
+    print(msg)
+    if REC:
+        REC.tool_result(msg, screenshot_path=shot)
 '''
 
 
@@ -171,8 +262,12 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
         "# Settings of the recorded run.",
         f"CHANNEL = {cfg.channel!r}  # override with AIWEBTEST_REPLAY_CHANNEL",
         f"ACTION_TIMEOUT_MS = {cfg.action_timeout_ms}",
+        f"INSTRUCTION = {report.instruction!r}",
+        f"TARGET_URL = {report.target_url!r}",
+        f"TOTAL_STEPS = {total_steps}",
         "",
-        _HELPERS.strip("\n"),
+        _HELPERS_PREFIX,
+        _HELPERS_BODY.rstrip("\n"),
         "",
         "",
         "async def launch_browser(pw, headless):",
@@ -198,8 +293,11 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
         "",
         "",
         "async def main():",
+        "    global REC, SHOT_DIR",
         "    failure = None",
         "    current = 'setup'",
+        "    REC = Recorder()",
+        "    SHOT_DIR = REC.output_dir / 'screenshots'",
         "    async with async_playwright() as pw:",
         "        browser = context = None",
         "        try:",
@@ -210,8 +308,6 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
         f"            context.set_default_timeout({cfg.action_timeout_ms})",
         f"            context.set_default_navigation_timeout({cfg.nav_timeout_ms})",
         "            page = await context.new_page()",
-        "            screenshots_dir = Path('generated_screenshots')",
-        "            screenshots_dir.mkdir(exist_ok=True)",
     ]
 
     body = _render_steps(report)
@@ -225,6 +321,7 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
             "        except Exception as exc:",
             "            failure = exc",
             "            traceback.print_exc()",
+            "            REC.fail(f'{type(exc).__name__}: {exc}')",
             "        finally:",
             "            for closer in (context, browser):",
             "                try:",
@@ -233,15 +330,24 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
             "                except Exception:",
             "                    pass",
             "",
+            "    if failure is None:",
+            "        verdict = 'pass'",
+            "        outcome = (f'PASS - {TOTAL_STEPS} step(s) replayed, '",
+            "                   f'{PASSED_ASSERTIONS} assertion(s) verified')",
+            "    elif isinstance(failure, AssertionError):",
+            "        verdict = 'fail'",
+            "        outcome = f'FAIL at {current} - {failure}'",
+            "    else:",
+            "        verdict = 'error'",
+            "        outcome = f'ERROR at {current} - {type(failure).__name__}: {failure}'",
+            "    artifacts = REC.finalize(verdict, outcome)",
+            "",
             "    # Always end with a visible verdict (and a matching exit code).",
             "    print()",
             "    print('=' * 60)",
-            "    if failure is None:",
-            f"        print(f'REPLAY RESULT: PASS - {total_steps} step(s) replayed, '",
-            "              f'{PASSED_ASSERTIONS} assertion(s) verified')",
-            "    else:",
-            "        print(f'REPLAY RESULT: FAIL at {current}')",
-            "        print(f'  {type(failure).__name__}: {failure}')",
+            "    print(f'REPLAY RESULT: {outcome}')",
+            "    if artifacts:",
+            "        print(f\"Report: {artifacts['html']}\")",
             "    print('=' * 60)",
             "    if failure is not None:",
             "        raise SystemExit(1)",
@@ -261,7 +367,6 @@ def _hint_for(step, ref: str) -> dict[str, Any]:
 
 def _render_steps(report: TestReport) -> list[str]:
     lines: list[str] = []
-    shot_index = 0
     replayable = [s for s in report.steps if s.kind == StepKind.TOOL_CALL and s.tool_name]
     total = len(replayable)
     for step_no, step in enumerate(replayable, start=1):
@@ -269,20 +374,25 @@ def _render_steps(report: TestReport) -> list[str]:
         tool = step.tool_name
         ref = args.get("ref")
         hint = _hint_for(step, ref) if ref else None
-        # "current" feeds the final FAIL summary with the step that broke.
+        # "current" feeds the final FAIL summary with the step that broke; the
+        # Recorder mirrors each call into report.json like the live run.
         lines.append(f"current = note('step {step_no}/{total}: {tool}')")
+        lines.append(f"REC.tool_call({_py(tool)}, {_py(args)}, hint={_py(step.locator_hint)})")
 
         if tool == "navigate":
             lines.append(f"await page.goto({_py(args.get('url', ''))}, wait_until='load')")
             lines.append("await settle(page)")
+            lines.append("REC.tool_result(f'Navigated to {page.url}')")
         elif tool == "get_page_snapshot":
             lines.append("await snapshot(page)")
+            lines.append("REC.tool_result('Snapshot taken')")
         elif tool == "click":
             lines.append("await tag(page)")
             lines.append(f"loc = await resolve(page, {_py(hint)})")
             lines.append("await loc.click()")
             # A click often navigates / re-renders; let the page settle before the next step.
             lines.append("await settle(page)")
+            lines.append(f"REC.tool_result({_py(f'Clicked {ref}')})")
         elif tool == "type_text":
             lines.append("await tag(page)")
             lines.append(f"loc = await resolve(page, {_py(hint)})")
@@ -290,20 +400,25 @@ def _render_steps(report: TestReport) -> list[str]:
             if args.get("submit"):
                 lines.append("await loc.press('Enter')")
                 lines.append("await settle(page)")
+            lines.append(f"REC.tool_result({_py(f'Typed into {ref}')})")
         elif tool == "select_option":
             lines.append("await tag(page)")
             lines.extend(_select_option_lines(hint, args))
+            selected = args.get("value", "")
+            lines.append(f"REC.tool_result({_py(f'Selected {selected!r} in {ref}')})")
         elif tool == "press_key":
-            lines.append(f"await page.keyboard.press({_py(args.get('key', ''))})")
+            key = args.get("key", "")
+            lines.append(f"await page.keyboard.press({_py(key)})")
+            lines.append(f"REC.tool_result({_py(f'Pressed {key}')})")
         elif tool == "wait_for":
             lines.extend(_wait_for_lines(hint, args))
+            lines.append("REC.tool_result('Wait satisfied')")
         elif tool == "screenshot":
-            shot_index += 1
+            lines.append("shot = next_shot_path()")
             lines.append(
-                "await page.screenshot("
-                f"path=str(screenshots_dir / 'shot_{shot_index:03d}.png'), "
-                f"full_page={bool(args.get('full_page', False))})"
+                f"await page.screenshot(path=shot, full_page={bool(args.get('full_page', False))})"
             )
+            lines.append("REC.tool_result('Screenshot captured', screenshot_path=shot)")
         elif tool == "get_text":
             if ref:
                 lines.append("await tag(page)")
@@ -311,8 +426,10 @@ def _render_steps(report: TestReport) -> list[str]:
                 lines.append("print(await loc.inner_text())")
             else:
                 lines.append("print(await page.inner_text('body'))")
+            lines.append("REC.tool_result('Read text')")
         elif tool == "assert_that":
             target = _py(hint) if ref else "None"
+            # assert_that records the AssertionResult (with screenshot) itself.
             lines.append(
                 "await assert_that(page, "
                 f"condition={_py(args.get('condition', ''))}, "
@@ -322,6 +439,9 @@ def _render_steps(report: TestReport) -> list[str]:
             )
         elif tool == "finish_test":
             lines.append(f"print({_py('Finished: ' + str(args.get('summary', '')))})")
+            lines.append(
+                f"REC.tool_result({_py('Recorded verdict: ' + str(args.get('verdict', '')))})"
+            )
         else:
             lines.append(f"print('Skipped unsupported tool: {tool}')")
     return lines
