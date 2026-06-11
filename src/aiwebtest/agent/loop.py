@@ -61,6 +61,7 @@ class AgentLoop:
             model=self.settings.model,
             target_url=self.target_url,
             output_dir=self.run_dir,
+            browser=self.settings.browser,
         )
         self.bus.publish("status", state="starting")
 

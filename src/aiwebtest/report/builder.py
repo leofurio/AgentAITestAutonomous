@@ -6,17 +6,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..agent.schemas import AssertionResult, Step, StepKind, TestReport, Verdict
+from ..config import BrowserConfig
 from .html import render_html
 from .playwright_codegen import generate_playwright_script
 
 
 class ReportBuilder:
     def __init__(self, run_id: str, instruction: str, model: str,
-                 target_url: str | None, output_dir: Path) -> None:
+                 target_url: str | None, output_dir: Path,
+                 browser: BrowserConfig | None = None) -> None:
         self.report = TestReport(
             run_id=run_id, instruction=instruction, model=model, target_url=target_url
         )
         self.output_dir = output_dir
+        self.browser = browser
         self._step_index = 0
 
     def _next_index(self) -> int:
@@ -62,5 +65,7 @@ class ReportBuilder:
         playwright_path = self.output_dir / "playwright_test.py"
         json_path.write_text(self.report.model_dump_json(indent=2), encoding="utf-8")
         html_path.write_text(render_html(self.report), encoding="utf-8")
-        playwright_path.write_text(generate_playwright_script(self.report), encoding="utf-8")
+        playwright_path.write_text(
+            generate_playwright_script(self.report, browser=self.browser), encoding="utf-8"
+        )
         return {"json": json_path, "html": html_path, "playwright": playwright_path}
