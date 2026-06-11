@@ -35,6 +35,7 @@ ROLE_MAP = {
 ROLE_OK = {"button", "link", "heading", "textbox", "checkbox", "radio", "tab", "menuitem"}
 
 PASSED_ASSERTIONS = 0     # incremented by assert_that; reported in the final summary
+FAILED_ASSERTIONS = []    # descriptions of failed assertions; forces the fail verdict
 REC = None                # Recorder instance, created in main()
 SHOT_DIR = Path('screenshots')
 _shot_counter = 0
@@ -201,6 +202,8 @@ async def _evaluate_assertion(page, loc, condition, expected):
 
 
 async def assert_that(page, condition, target=None, expected=None, description=""):
+    # Like the live agent run, a failed assertion does NOT abort the replay: it is
+    # recorded, the remaining steps still execute, and the final verdict is "fail".
     global PASSED_ASSERTIONS
     await tag(page)
     loc = await resolve(page, target) if target else None
@@ -213,12 +216,13 @@ async def assert_that(page, condition, target=None, expected=None, description="
         shot = None
     if REC:
         REC.assertion(description, condition, expected, actual, passed, shot)
-    if not passed:
-        raise AssertionError(
-            f"{description}: {condition} failed (expected {expected!r}, actual {actual!r})"
-        )
-    PASSED_ASSERTIONS += 1
-    msg = f"PASS: {description or condition}"
+    if passed:
+        PASSED_ASSERTIONS += 1
+        msg = f"PASS: {description or condition}"
+    else:
+        FAILED_ASSERTIONS.append(description or condition)
+        msg = (f"FAIL: {description or condition}: {condition} failed "
+               f"(expected {expected!r}, actual {str(actual)[:300]!r}) - continuing")
     print(msg)
     if REC:
         REC.tool_result(msg, screenshot_path=shot)
@@ -330,16 +334,18 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
             "                except Exception:",
             "                    pass",
             "",
-            "    if failure is None:",
+            "    if failure is not None:",
+            "        verdict = 'error'",
+            "        outcome = f'ERROR at {current} - {type(failure).__name__}: {failure}'",
+            "    elif FAILED_ASSERTIONS:",
+            "        verdict = 'fail'",
+            "        outcome = (f'FAIL - {len(FAILED_ASSERTIONS)} of '",
+            "                   f'{PASSED_ASSERTIONS + len(FAILED_ASSERTIONS)} assertion(s) failed: '",
+            "                   + '; '.join(FAILED_ASSERTIONS))",
+            "    else:",
             "        verdict = 'pass'",
             "        outcome = (f'PASS - {TOTAL_STEPS} step(s) replayed, '",
             "                   f'{PASSED_ASSERTIONS} assertion(s) verified')",
-            "    elif isinstance(failure, AssertionError):",
-            "        verdict = 'fail'",
-            "        outcome = f'FAIL at {current} - {failure}'",
-            "    else:",
-            "        verdict = 'error'",
-            "        outcome = f'ERROR at {current} - {type(failure).__name__}: {failure}'",
             "    artifacts = REC.finalize(verdict, outcome)",
             "",
             "    # Always end with a visible verdict (and a matching exit code).",
@@ -349,7 +355,7 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
             "    if artifacts:",
             "        print(f\"Report: {artifacts['html']}\")",
             "    print('=' * 60)",
-            "    if failure is not None:",
+            "    if failure is not None or FAILED_ASSERTIONS:",
             "        raise SystemExit(1)",
             "",
             "",
