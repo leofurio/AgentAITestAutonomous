@@ -4,6 +4,8 @@ code_runner_allow_remote: false # keep false: only local callers may use the cod
 model: claude-opus-4-8
 normalizer_provider: ""         # provider for the instruction normalizer (empty = agent_provider)
 normalizer_model: ""            # model for the instruction normalizer (empty = model)
+normalizer_max_tokens: 1024     # tight output cap → compact spec, fewer downstream input tokens
+normalizer_effort: low          # effort for the normalizer rewrite (empty = reuse effort)
 effort: medium                  # speed/quality balance; high|xhigh for hard sites, low for fastest
 max_tokens: 8192
 browser:

@@ -107,3 +107,26 @@ def test_normalizer_settings_inherits_provider_key_when_no_dedicated_key():
     base = Settings(agent_provider="anthropic", ANTHROPIC_API_KEY="run-key")
     derived = normalizer_settings(base)
     assert derived.anthropic_api_key == "run-key"
+
+
+def test_normalizer_settings_caps_tokens_and_effort_for_optimization():
+    base = Settings(
+        model="claude-opus-4-8",
+        max_tokens=8192,
+        effort="high",
+        normalizer_max_tokens=512,
+        normalizer_effort="low",
+    )
+    derived = normalizer_settings(base)
+    # The normalizer runs under a tighter budget to optimize tokens...
+    assert derived.max_tokens == 512
+    assert derived.effort == "low"
+    # ...without touching the main run's budget.
+    assert base.max_tokens == 8192
+    assert base.effort == "high"
+
+
+def test_normalizer_effort_falls_back_to_run_effort_when_empty():
+    base = Settings(effort="high", normalizer_effort="")
+    derived = normalizer_settings(base)
+    assert derived.effort == "high"

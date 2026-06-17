@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # and model. Empty values fall back to agent_provider / model respectively.
     normalizer_provider: str = ""
     normalizer_model: str = ""
+    # Token budget for the normalizer pass: a tight output cap keeps the canonical spec
+    # compact (fewer input tokens for the downstream loop) and bounds the pass's own cost.
+    normalizer_max_tokens: int = 1024
+    # Lower effort = less thinking/tokens for what is a simple rewrite. Empty = reuse effort.
+    normalizer_effort: str = "low"
     # /api/playwright/execute runs arbitrary Python: keep it opt-out and local-only.
     code_runner_enabled: bool = True
     code_runner_allow_remote: bool = False
@@ -137,7 +142,14 @@ def normalizer_settings(settings: Settings) -> Settings:
     """
     provider = settings.normalizer_provider or settings.agent_provider
     model = settings.normalizer_model or settings.model
-    update: dict[str, Any] = {"agent_provider": provider, "model": model}
+    update: dict[str, Any] = {
+        "agent_provider": provider,
+        "model": model,
+        # Cap the pass's output and effort to keep both its cost and the canonical spec
+        # (the downstream loop's input) small. build_client / the adapters read these.
+        "max_tokens": settings.normalizer_max_tokens,
+        "effort": settings.normalizer_effort or settings.effort,
+    }
     # Dedicated normalizer keys override the inherited provider keys when set; build_client
     # reads anthropic_api_key / openai_api_key / openrouter_api_key off these Settings.
     if settings.normalizer_anthropic_api_key:

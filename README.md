@@ -40,13 +40,23 @@ structures, never inventing steps or leaking secret values (data is referenced b
 e.g. `{password}`). The canonical rewrite is streamed to the UI and recorded in the
 report. It is best-effort — if it fails, the run falls back to the original instruction.
 
+The pass is also a **token optimizer**: it compresses the request into a terse canonical
+spec (short imperative steps, no filler or restated values), so the downstream loop carries
+fewer input tokens on every turn. The pass itself runs under a tight output budget
+(`normalizer_max_tokens`, default 1024) and low `normalizer_effort` to keep its own cost
+small.
+
 Toggle it with `agent.normalize_instruction` (default `true`). It can run on a cheaper or
 faster model than the main loop via `normalizer_provider` / `normalizer_model` (empty =
-reuse `agent_provider` / `model`):
+reuse `agent_provider` / `model`), with optional dedicated keys
+(`NORMALIZER_ANTHROPIC_API_KEY` / `NORMALIZER_OPENAI_API_KEY` /
+`NORMALIZER_OPENROUTER_API_KEY`, each falling back to the matching provider key):
 
 ```bash
 AIWEBTEST_AGENT__NORMALIZE_INSTRUCTION=false   # disable
 AIWEBTEST_NORMALIZER_MODEL=claude-haiku-4-5    # normalize on a lighter model
+AIWEBTEST_NORMALIZER_MAX_TOKENS=1024           # cap the canonical spec size
+AIWEBTEST_NORMALIZER_EFFORT=low                # cheaper rewrite (empty = reuse effort)
 ```
 
 The agent calls tools — `navigate`, `get_page_snapshot`, `click`, `type_text`,
