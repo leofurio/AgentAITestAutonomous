@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import Settings
+from ..logging_config import get_logger
+
+logger = get_logger("normalizer")
 
 NORMALIZE_SYSTEM_PROMPT = """\
 You normalize web-application test requests. Given a free-form test description (and \
@@ -73,11 +76,19 @@ class InstructionNormalizer:
     ) -> str:
         """Return the canonical JSON rewrite, or the original instruction on any failure."""
         request = _build_request(instruction, target_url, data)
+        logger.debug("normalize request (model=%s):\n%s", self.settings.model, request)
         message = await self.client.complete(
             [{"role": "user", "content": request}], [], NORMALIZE_SYSTEM_PROMPT
         )
-        canonical = _to_canonical_json(_collect_text(message))
-        return canonical or instruction.strip()
+        raw = _collect_text(message)
+        logger.debug("normalize raw model output: %s", raw)
+        canonical = _to_canonical_json(raw)
+        if canonical is None:
+            logger.debug("normalize: output not valid JSON of the expected shape; "
+                         "falling back to the original instruction")
+            return instruction.strip()
+        logger.debug("normalize canonical JSON: %s", canonical)
+        return canonical
 
 
 def _to_canonical_json(text: str) -> str | None:

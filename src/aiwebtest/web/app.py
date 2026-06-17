@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings, load_settings, normalizer_settings
+from ..logging_config import configure_logging
 from .manager import RunManager
 from .routes import router as api_router
 from .ws import router as ws_router
@@ -81,6 +82,7 @@ def create_app(
     normalizer_factory: Callable[[], Any] | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
+    configure_logging(settings.log_level)
     n_settings = normalizer_settings(settings)
     app = FastAPI(title="aiwebtest", version="0.1.0")
     app.state.settings = settings
