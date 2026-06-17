@@ -1,15 +1,17 @@
 """InstructionNormalizer: rewrite a free-form test request into a canonical, deterministic spec.
 
 A small pre-pass LLM call takes the user's natural-language instruction (plus the target
-URL and any test data) and rewrites it into a normalized, numbered, unambiguous form.
-Feeding the agent loop this canonical text — instead of the raw prose — reduces run-to-run
-variance: the same intent yields the same steps and the same assertions. The pass is
-deliberately conservative: it clarifies and structures, it never invents steps or data.
+URL and any test data) and rewrites it into a normalized, structured form. Feeding the
+agent loop this canonical spec — instead of the raw prose — reduces run-to-run variance:
+the same intent yields the same steps and the same assertions. The pass is deliberately
+conservative: it clarifies and structures, it never invents steps or data.
 
-It is also a token optimizer: the rewrite is kept compact (terse imperative steps, no
-filler or restated values) so the downstream agent loop carries fewer input tokens on
-every turn. The pass itself runs under a tight output budget and effort (see
-``normalizer_settings``) to keep its own cost low.
+The canonical form is a **compact JSON object** (`objective`, `steps`, `expected_results`).
+JSON gives a rigid, machine-validatable shape — more deterministic than prose — and is
+re-serialized minified with a fixed key order, so the same intent always yields the same
+bytes. It is also a token optimizer: terse fields, no filler or restated values, kept under
+a tight output budget/effort (see ``normalizer_settings``). If the model returns anything
+that is not valid JSON of the expected shape, the pass falls back to the raw instruction.
 """
 
 from __future__ import annotations
@@ -22,11 +24,11 @@ from ..config import Settings
 
 NORMALIZE_SYSTEM_PROMPT = """\
 You normalize web-application test requests. Given a free-form test description (and \
-optionally a target URL and test data), rewrite it into a single canonical specification \
-that another agent will execute against a real browser. Your two goals: make the intent \
-explicit, ordered, and unambiguous so the same request always produces the same test, and \
-make the result as token-compact as possible — you are a rewriter and compressor, not a \
-planner.
+optionally a target URL and test data), rewrite it into a single canonical JSON \
+specification that another agent will execute against a real browser. Your two goals: make \
+the intent explicit, ordered, and unambiguous so the same request always produces the same \
+test, and make the result as token-compact as possible — you are a rewriter and compressor, \
+not a planner.
 
 Rules:
 - Preserve the original intent exactly. Do NOT add steps, pages, checks, or data that the \
@@ -47,26 +49,18 @@ trivially sequential actions only when they are unambiguous (e.g. "type {usernam
 {password}" is fine; never merge distinct verifications).
 - Omit obvious mechanics the executing agent already knows (taking snapshots, waiting for \
 loads) unless the request explicitly depends on them.
-- No duplication between Steps and Expected results.
-- Output ONLY the normalized specification in the exact structure below — no preamble, \
-no explanations, no markdown fences.
+- No duplication between steps and expected_results.
 
-Output structure:
-Objective: <one short clause: what the test verifies>
-Steps:
-1. <terse imperative action>
-2. <terse imperative action>
-...
-Expected results:
-- <terse verifiable assertion>
-- <terse verifiable assertion>
-...
+Output ONLY a single JSON object — no preamble, no explanation, no markdown fences — with \
+exactly these keys:
+{"objective": "<one short clause: what the test verifies>", "steps": ["<terse imperative \
+action>", ...], "expected_results": ["<terse verifiable assertion>", ...]}
 """
 
 
 @dataclass
 class InstructionNormalizer:
-    """Wraps an agent client to produce a normalized instruction string."""
+    """Wraps an agent client to produce a normalized JSON instruction string."""
 
     client: Any
     settings: Settings
@@ -77,13 +71,63 @@ class InstructionNormalizer:
         target_url: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> str:
-        """Return the canonical rewrite of the request, or the original on empty output."""
+        """Return the canonical JSON rewrite, or the original instruction on any failure."""
         request = _build_request(instruction, target_url, data)
         message = await self.client.complete(
             [{"role": "user", "content": request}], [], NORMALIZE_SYSTEM_PROMPT
         )
-        normalized = _collect_text(message)
-        return normalized or instruction.strip()
+        canonical = _to_canonical_json(_collect_text(message))
+        return canonical or instruction.strip()
+
+
+def _to_canonical_json(text: str) -> str | None:
+    """Parse, validate and minify the model output into a canonical JSON spec.
+
+    Returns a minified JSON string with a fixed key order, or None when the output is not
+    valid JSON of the expected shape (so the caller can fall back to the raw instruction).
+    """
+    payload = _strip_code_fence(text)
+    if not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    objective = parsed.get("objective")
+    steps = parsed.get("steps")
+    expected = parsed.get("expected_results")
+    if not isinstance(objective, str) or not isinstance(steps, list):
+        return None
+    if expected is None:
+        expected = []
+    if not isinstance(expected, list):
+        return None
+    if not objective.strip() or not steps:
+        return None
+
+    canonical = {
+        "objective": objective.strip(),
+        "steps": [str(s).strip() for s in steps],
+        "expected_results": [str(e).strip() for e in expected],
+    }
+    # Minified + fixed key order = deterministic bytes and minimal tokens.
+    return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove a leading/trailing markdown code fence if the model wrapped its JSON."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    # Drop the opening fence (e.g. ``` or ```json) and a trailing fence line if present.
+    lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
 
 
 def _build_request(
