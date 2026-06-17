@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    # Optional dedicated API keys for the normalizer pass. Each falls back to the matching
+    # provider key above when empty, so the normalizer can run on a separate key/account
+    # (or even a different provider) without affecting the main run.
+    normalizer_anthropic_api_key: str = Field(default="", alias="NORMALIZER_ANTHROPIC_API_KEY")
+    normalizer_openai_api_key: str = Field(default="", alias="NORMALIZER_OPENAI_API_KEY")
+    normalizer_openrouter_api_key: str = Field(default="", alias="NORMALIZER_OPENROUTER_API_KEY")
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "aiwebtest"
@@ -131,7 +137,16 @@ def normalizer_settings(settings: Settings) -> Settings:
     """
     provider = settings.normalizer_provider or settings.agent_provider
     model = settings.normalizer_model or settings.model
-    return settings.model_copy(update={"agent_provider": provider, "model": model})
+    update: dict[str, Any] = {"agent_provider": provider, "model": model}
+    # Dedicated normalizer keys override the inherited provider keys when set; build_client
+    # reads anthropic_api_key / openai_api_key / openrouter_api_key off these Settings.
+    if settings.normalizer_anthropic_api_key:
+        update["anthropic_api_key"] = settings.normalizer_anthropic_api_key
+    if settings.normalizer_openai_api_key:
+        update["openai_api_key"] = settings.normalizer_openai_api_key
+    if settings.normalizer_openrouter_api_key:
+        update["openrouter_api_key"] = settings.normalizer_openrouter_api_key
+    return settings.model_copy(update=update)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
