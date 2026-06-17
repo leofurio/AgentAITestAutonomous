@@ -90,3 +90,20 @@ def test_normalizer_settings_falls_back_to_run_provider_and_model():
     derived = normalizer_settings(base)
     assert derived.agent_provider == "anthropic"
     assert derived.model == "claude-opus-4-8"
+
+
+def test_normalizer_settings_dedicated_keys_override_inherited():
+    base = Settings(
+        agent_provider="openai",
+        OPENAI_API_KEY="run-key",
+        NORMALIZER_OPENAI_API_KEY="norm-key",
+    )
+    derived = normalizer_settings(base)
+    assert derived.openai_api_key == "norm-key"  # dedicated key wins for the normalizer
+    assert base.openai_api_key == "run-key"      # main run keeps its own key
+
+
+def test_normalizer_settings_inherits_provider_key_when_no_dedicated_key():
+    base = Settings(agent_provider="anthropic", ANTHROPIC_API_KEY="run-key")
+    derived = normalizer_settings(base)
+    assert derived.anthropic_api_key == "run-key"
