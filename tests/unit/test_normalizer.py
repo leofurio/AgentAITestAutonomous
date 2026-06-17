@@ -1,10 +1,16 @@
-"""The instruction normalizer rewrites a free-form request into a canonical spec."""
+"""The instruction normalizer rewrites a free-form request into a canonical JSON spec."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from aiwebtest.agent.normalizer import InstructionNormalizer, _build_request
+from aiwebtest.agent.normalizer import (
+    InstructionNormalizer,
+    _build_request,
+    _to_canonical_json,
+)
 from aiwebtest.config import Settings, normalizer_settings
 
 
@@ -25,27 +31,58 @@ def _settings() -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_normalize_returns_canonical_text():
-    client = _FakeClient("Objective: log in.\nSteps:\n1. navigate")
+async def test_normalize_returns_canonical_minified_json():
+    # Model returns pretty JSON; the normalizer re-serializes it minified with a fixed
+    # key order so the same intent always yields the same bytes.
+    raw = """
+    {
+      "objective": "log in",
+      "steps": ["navigate to login", "type {username} and {password}", "click submit"],
+      "expected_results": ["welcome message shown"]
+    }
+    """
+    client = _FakeClient(raw)
     normalizer = InstructionNormalizer(client, _settings())
 
     out = await normalizer.normalize(
         "log in pls", target_url="https://example.test", data={"username": "demo"}
     )
 
-    assert out == "Objective: log in.\nSteps:\n1. navigate"
+    assert out == (
+        '{"objective":"log in",'
+        '"steps":["navigate to login","type {username} and {password}","click submit"],'
+        '"expected_results":["welcome message shown"]}'
+    )
     # No tools are offered to the normalizer — it only produces text.
     messages, tools, system_prompt = client.calls[0]
     assert tools == []
-    assert "normalize" in system_prompt.lower()
+    assert "json" in system_prompt.lower()
     request = messages[0]["content"]
     assert "log in pls" in request
     assert "https://example.test" in request
 
 
 @pytest.mark.asyncio
+async def test_normalize_strips_markdown_code_fence():
+    client = _FakeClient('```json\n{"objective":"x","steps":["go"]}\n```')
+    normalizer = InstructionNormalizer(client, _settings())
+
+    out = await normalizer.normalize("do x")
+    assert out == '{"objective":"x","steps":["go"],"expected_results":[]}'
+
+
+@pytest.mark.asyncio
+async def test_normalize_falls_back_to_original_on_invalid_json():
+    client = _FakeClient("Objective: x\nSteps:\n1. go")  # not JSON
+    normalizer = InstructionNormalizer(client, _settings())
+
+    out = await normalizer.normalize("  keep me  ")
+    assert out == "keep me"
+
+
+@pytest.mark.asyncio
 async def test_normalize_does_not_leak_data_values():
-    client = _FakeClient("Objective: x")
+    client = _FakeClient('{"objective":"x","steps":["go"]}')
     normalizer = InstructionNormalizer(client, _settings())
 
     await normalizer.normalize("do it", data={"password": "s3cret"})
@@ -62,6 +99,19 @@ async def test_normalize_falls_back_to_original_on_empty_output():
 
     out = await normalizer.normalize("  keep me  ")
     assert out == "keep me"
+
+
+def test_to_canonical_json_rejects_missing_or_malformed_shape():
+    assert _to_canonical_json("not json") is None
+    assert _to_canonical_json("[1, 2, 3]") is None          # not an object
+    assert _to_canonical_json('{"steps": ["go"]}') is None  # no objective
+    assert _to_canonical_json('{"objective": "x"}') is None  # no steps
+    assert _to_canonical_json('{"objective": "x", "steps": []}') is None  # empty steps
+
+
+def test_to_canonical_json_defaults_expected_results():
+    out = _to_canonical_json('{"objective": "x", "steps": ["go"]}')
+    assert json.loads(out)["expected_results"] == []
 
 
 def test_build_request_omits_optional_sections():

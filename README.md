@@ -32,13 +32,16 @@ Chat instruction ─▶ Normalizer ─▶ Claude (tool-use loop) ─▶ Playwrig
 ### Instruction normalization
 
 Before driving the browser, a small **normalizer** pass rewrites the free-form
-instruction (plus the target URL and the data keys) into a canonical, numbered
-specification — explicit ordered steps and verifiable expected results. Feeding the agent
-this normalized text instead of raw prose reduces run-to-run variance, so the same intent
-yields the same steps and assertions. The pass is conservative: it clarifies and
-structures, never inventing steps or leaking secret values (data is referenced by key,
-e.g. `{password}`). The canonical rewrite is streamed to the UI and recorded in the
-report. It is best-effort — if it fails, the run falls back to the original instruction.
+instruction (plus the target URL and the data keys) into a canonical **JSON** spec —
+`{"objective", "steps", "expected_results"}`. JSON gives a rigid, machine-validatable
+shape (more deterministic than prose) and is re-serialized minified with a fixed key
+order, so the same intent always yields the same bytes. Feeding the agent this canonical
+spec instead of raw prose reduces run-to-run variance, so the same intent yields the same
+steps and assertions. The pass is conservative: it clarifies and structures, never
+inventing steps or leaking secret values (data is referenced by key, e.g. `{password}`).
+The canonical rewrite is streamed to the UI and recorded in the report. It is best-effort:
+if the model returns anything that is not valid JSON of the expected shape, the run falls
+back to the original instruction.
 
 The pass is also a **token optimizer**: it compresses the request into a terse canonical
 spec (short imperative steps, no filler or restated values), so the downstream loop carries
