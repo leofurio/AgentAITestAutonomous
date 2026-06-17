@@ -109,6 +109,11 @@ def tool_turn(name: str, tool_input: dict[str, Any], text: str = "") -> FakeMess
 tool_turn._counter = _Counter()  # type: ignore[attr-defined]
 
 
+def text_turn(text: str) -> FakeMessage:
+    """Build a text-only assistant turn (e.g. the normalizer's canonical rewrite)."""
+    return FakeMessage(content=[FakeTextBlock(text=text)], stop_reason="end_turn")
+
+
 # --- Settings --------------------------------------------------------------------
 
 @pytest.fixture

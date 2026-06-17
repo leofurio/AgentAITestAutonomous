@@ -2,6 +2,8 @@ agent_provider: anthropic
 code_runner_enabled: true       # POST /api/playwright/execute (runs Python on this machine)
 code_runner_allow_remote: false # keep false: only local callers may use the code runner
 model: claude-opus-4-8
+normalizer_provider: ""         # provider for the instruction normalizer (empty = agent_provider)
+normalizer_model: ""            # model for the instruction normalizer (empty = model)
 effort: medium                  # speed/quality balance; high|xhigh for hard sites, low for fastest
 max_tokens: 8192
 browser:
@@ -17,6 +19,7 @@ agent:
   max_retries: 2
   include_screenshots: true   # vision on/off
   allowed_domains: []         # empty = derived from target_url
+  normalize_instruction: true # rewrite the request into a canonical spec for determinism
 report:
   output_dir: runs
 data: {}                      # default base test data merged into every run

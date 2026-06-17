@@ -27,6 +27,9 @@ class ReportBuilder:
         self._step_index += 1
         return idx
 
+    def set_normalized_instruction(self, text: str) -> None:
+        self.report.normalized_instruction = text
+
     def add_reasoning(self, text: str) -> Step:
         step = Step(index=self._next_index(), kind=StepKind.REASONING, text=text)
         self.report.steps.append(step)

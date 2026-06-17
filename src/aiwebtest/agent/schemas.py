@@ -54,6 +54,8 @@ class Step(BaseModel):
 class TestReport(BaseModel):
     run_id: str
     instruction: str
+    # Canonical rewrite of `instruction` produced by the normalizer pass, if it ran.
+    normalized_instruction: str | None = None
     target_url: str | None = None
     model: str
     started_at: datetime = Field(default_factory=_now)

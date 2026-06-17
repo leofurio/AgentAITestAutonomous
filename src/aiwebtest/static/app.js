@@ -37,6 +37,10 @@ function handleEvent(evt) {
   const { type, data } = evt;
   if (type === "status") {
     setStatus(data.state);
+  } else if (type === "normalized") {
+    addCard("normalized", "normalized instruction", textNode(data.text, true));
+  } else if (type === "warning") {
+    addCard("warning", "warning", textNode(data.message));
   } else if (type === "reasoning") {
     addCard("reasoning", "reasoning", textNode(data.text));
   } else if (type === "step") {
