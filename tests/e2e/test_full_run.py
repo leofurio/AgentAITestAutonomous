@@ -17,7 +17,7 @@ from aiwebtest.agent.events import EventBus
 from aiwebtest.agent.loop import AgentLoop
 from aiwebtest.agent.schemas import Verdict
 from aiwebtest.browser.snapshot import take_snapshot
-from tests.conftest import LOGIN_URL, FakeAnthropicClient, tool_turn
+from tests.conftest import LOGIN_URL, FakeAnthropicClient, text_turn, tool_turn
 
 pytestmark = pytest.mark.asyncio
 
@@ -156,6 +156,53 @@ async def test_replay_continues_after_failed_assertion(settings, browser_page):
     assert "FAIL: text that does not exist" in out
     assert "PASS: still on the login page" in out   # executed AFTER the failure
     assert "REPLAY RESULT: FAIL - 1 of 2 assertion(s) failed" in out
+
+
+async def test_normalizer_pass_rewrites_instruction(settings, browser_page):
+    # With a normalizer factory wired in, the loop first rewrites the instruction into a
+    # canonical spec, records it on the report, and emits a "normalized" event — without
+    # disturbing the scripted browser-driving turns.
+    user, pwd, btn = await _discover_refs(browser_page)
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        tool_turn("get_page_snapshot", {}),
+        tool_turn("type_text", {"ref": user, "text": "demo"}),
+        tool_turn("type_text", {"ref": pwd, "text": "secret"}),
+        tool_turn("click", {"ref": btn}),
+        tool_turn("assert_that", {
+            "description": "welcome shown", "condition": "text_contains",
+            "expected": "Welcome, demo",
+        }),
+        tool_turn("finish_test", {"verdict": "pass", "summary": "ok"}),
+    ]
+    canonical = "Objective: log in.\nSteps:\n1. navigate to the login page"
+
+    bus = EventBus()
+    run_dir = settings.output_dir / "norm"
+    loop = AgentLoop(
+        client=FakeAnthropicClient(turns), settings=settings, run_id="norm",
+        instruction="log in pls", target_url=LOGIN_URL, data={}, bus=bus, run_dir=run_dir,
+        normalizer_factory=lambda: FakeAnthropicClient([text_turn(canonical)]),
+        normalizer_settings=settings,
+    )
+    events: list[dict] = []
+
+    async def drain():
+        async for e in bus:
+            events.append(e)
+
+    drain_task = asyncio.create_task(drain())
+    report = await loop.run()
+    await drain_task
+
+    assert report.verdict == Verdict.PASS
+    assert report.normalized_instruction == canonical
+    assert report.instruction == "log in pls"  # original preserved
+
+    norm_evt = next(e for e in events if e["type"] == "normalized")
+    assert norm_evt["data"]["text"] == canonical
+    data = json.loads((run_dir / "report.json").read_text())
+    assert data["normalized_instruction"] == canonical
 
 
 async def test_failed_assertion_yields_fail_verdict(settings, browser_page):

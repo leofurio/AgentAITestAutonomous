@@ -25,6 +25,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-transform: uppercase; letter-spacing: 0.05em; }
 .status.idle { color: var(--muted); }
 .status.running { color: var(--accent); }
+.status.normalizing { color: var(--accent); }
 .status.done { color: var(--pass); }
 .status.error { color: var(--fail); }
 .timeline-wrap { padding: 24px; overflow-y: auto; }
@@ -34,6 +35,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--muted); margin-bottom: 4px; }
 .card.reasoning { border-left: 3px solid #8957e5; }
+.card.normalized { border-left: 3px solid #2da44e; }
+.card.warning { border-left: 3px solid var(--warn); }
 .card.step { border-left: 3px solid var(--accent); }
 .card.assertion.pass { border-left: 3px solid var(--pass); }
 .card.assertion.fail { border-left: 3px solid var(--fail); }

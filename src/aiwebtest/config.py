@@ -41,6 +41,10 @@ class AgentConfig(BaseModel):
     max_retries: int = 2
     include_screenshots: bool = True
     allowed_domains: list[str] = Field(default_factory=list)
+    # Run a pre-pass that rewrites the free-form instruction/URL/data into a canonical,
+    # normalized spec before driving the browser. Trades one extra LLM call for more
+    # deterministic, repeatable runs.
+    normalize_instruction: bool = True
 
 
 class ReportConfig(BaseModel):
@@ -83,6 +87,10 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = ""
     openrouter_app_title: str = "aiwebtest"
     agent_provider: str = "anthropic"
+    # The instruction normalizer can run on a different (e.g. cheaper/faster) provider
+    # and model. Empty values fall back to agent_provider / model respectively.
+    normalizer_provider: str = ""
+    normalizer_model: str = ""
     # /api/playwright/execute runs arbitrary Python: keep it opt-out and local-only.
     code_runner_enabled: bool = True
     code_runner_allow_remote: bool = False
@@ -113,6 +121,17 @@ class Settings(BaseSettings):
     def output_dir(self) -> Path:
         path = Path(self.report.output_dir)
         return path if path.is_absolute() else ROOT_DIR / path
+
+
+def normalizer_settings(settings: Settings) -> Settings:
+    """Derive the Settings the instruction normalizer should run under.
+
+    Falls back to the run's provider/model when the normalizer-specific values are unset,
+    so the normalizer adapter resolves the right model via ``settings.model``.
+    """
+    provider = settings.normalizer_provider or settings.agent_provider
+    model = settings.normalizer_model or settings.model
+    return settings.model_copy(update={"agent_provider": provider, "model": model})
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

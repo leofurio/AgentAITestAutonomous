@@ -23,9 +23,17 @@ class Run:
 
 
 class RunManager:
-    def __init__(self, settings: Settings, client_factory: Callable[[], Any]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client_factory: Callable[[], Any],
+        normalizer_factory: Callable[[], Any] | None = None,
+        normalizer_settings: Settings | None = None,
+    ) -> None:
         self.settings = settings
         self.client_factory = client_factory
+        self.normalizer_factory = normalizer_factory
+        self.normalizer_settings = normalizer_settings or settings
         self._runs: dict[str, Run] = {}
 
     def create_run(
@@ -48,6 +56,8 @@ class RunManager:
             data=merged_data,
             bus=bus,
             run_dir=run_dir,
+            normalizer_factory=self.normalizer_factory,
+            normalizer_settings=self.normalizer_settings,
         )
         run.task = asyncio.create_task(self._guarded_run(loop, bus))
         return run_id

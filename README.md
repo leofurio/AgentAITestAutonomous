@@ -21,12 +21,32 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
 ## How it works
 
 ```
-Chat instruction ─▶ Claude (tool-use loop) ─▶ Playwright tools ─▶ live page
-                          ▲                          │
-                          └──── snapshot / result ───┘
+Chat instruction ─▶ Normalizer ─▶ Claude (tool-use loop) ─▶ Playwright tools ─▶ live page
+   + URL + data    (canonical spec)      ▲                        │
+                                         └──── snapshot / result ──┘
                                      │
                             EventBus ─▶ WebSocket ─▶ UI    ┌▶ report.json
                                      └────────────────────┴▶ report.html + screenshots
+```
+
+### Instruction normalization
+
+Before driving the browser, a small **normalizer** pass rewrites the free-form
+instruction (plus the target URL and the data keys) into a canonical, numbered
+specification — explicit ordered steps and verifiable expected results. Feeding the agent
+this normalized text instead of raw prose reduces run-to-run variance, so the same intent
+yields the same steps and assertions. The pass is conservative: it clarifies and
+structures, never inventing steps or leaking secret values (data is referenced by key,
+e.g. `{password}`). The canonical rewrite is streamed to the UI and recorded in the
+report. It is best-effort — if it fails, the run falls back to the original instruction.
+
+Toggle it with `agent.normalize_instruction` (default `true`). It can run on a cheaper or
+faster model than the main loop via `normalizer_provider` / `normalizer_model` (empty =
+reuse `agent_provider` / `model`):
+
+```bash
+AIWEBTEST_AGENT__NORMALIZE_INSTRUCTION=false   # disable
+AIWEBTEST_NORMALIZER_MODEL=claude-haiku-4-5    # normalize on a lighter model
 ```
 
 The agent calls tools — `navigate`, `get_page_snapshot`, `click`, `type_text`,

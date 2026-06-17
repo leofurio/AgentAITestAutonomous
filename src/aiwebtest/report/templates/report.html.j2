@@ -51,6 +51,14 @@
       <p><a href="playwright_test.py">Download generated Playwright script</a></p>
     </section>
 
+    {% if report.normalized_instruction %}
+    <section>
+      <h2>Normalized instruction</h2>
+      <p class="meta">Canonical rewrite of the request used to drive the run for determinism.</p>
+      <pre>{{ report.normalized_instruction }}</pre>
+    </section>
+    {% endif %}
+
     <section>
       <h2>Assertions ({{ report.assertions | length }})</h2>
       {% if report.assertions %}

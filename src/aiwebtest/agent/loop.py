@@ -7,6 +7,7 @@ report on any failure.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -29,6 +30,8 @@ class AgentLoop:
         data: dict[str, Any],
         bus: EventBus,
         run_dir: Path,
+        normalizer_factory: Callable[[], Any] | None = None,
+        normalizer_settings: Settings | None = None,
     ) -> None:
         self.client = ensure_agent_client(client, settings)
         self.settings = settings
@@ -38,6 +41,11 @@ class AgentLoop:
         self.data = data
         self.bus = bus
         self.run_dir = run_dir
+        # A factory minting a *separate* client for the normalizer pass, plus the Settings
+        # it runs under (provider/model may differ from the loop's). When absent, the
+        # normalizer pass is skipped regardless of the config flag.
+        self.normalizer_factory = normalizer_factory
+        self.normalizer_settings = normalizer_settings or settings
 
     def _allowed_domains(self) -> list[str]:
         configured = list(self.settings.agent.allowed_domains)
@@ -65,6 +73,8 @@ class AgentLoop:
         )
         self.bus.publish("status", state="starting")
 
+        instruction = await self._maybe_normalize(builder)
+
         try:
             async with BrowserSession(
                 self.settings.browser, self.run_dir / "screenshots"
@@ -75,7 +85,9 @@ class AgentLoop:
                     allowed_domains=self._allowed_domains(),
                     include_screenshots=self.settings.agent.include_screenshots,
                 )
-                verdict, summary = await self._drive(builder, toolset, TOOL_SCHEMAS)
+                verdict, summary = await self._drive(
+                    builder, toolset, TOOL_SCHEMAS, instruction
+                )
         except Exception as exc:  # noqa: BLE001 - top-level safety net
             verdict, summary = Verdict.ERROR, f"Run aborted: {type(exc).__name__}: {exc}"
             self.bus.publish("error", message=summary)
@@ -94,12 +106,42 @@ class AgentLoop:
         self.bus.close()
         return report
 
-    async def _drive(self, builder, toolset, tool_schemas) -> tuple[Verdict, str]:
+    async def _maybe_normalize(self, builder) -> str:
+        """Rewrite the instruction into a canonical form for a more deterministic run.
+
+        Returns the instruction the loop should drive with — the normalized rewrite when
+        the pass is enabled and succeeds, otherwise the original. Normalization is
+        best-effort: any failure falls back to the raw instruction so a run is never lost
+        to a normalizer error.
+        """
+        if not self.settings.agent.normalize_instruction or self.normalizer_factory is None:
+            return self.instruction
+
+        from .normalizer import InstructionNormalizer
+
+        self.bus.publish("status", state="normalizing")
+        try:
+            client = ensure_agent_client(self.normalizer_factory(), self.normalizer_settings)
+            normalizer = InstructionNormalizer(client, self.normalizer_settings)
+            normalized = await normalizer.normalize(
+                self.instruction, self.target_url, self.data
+            )
+        except Exception as exc:  # noqa: BLE001 - normalization must never abort a run
+            self.bus.publish("warning", message=f"Instruction normalization skipped: {exc}")
+            return self.instruction
+
+        if normalized and normalized.strip() != self.instruction.strip():
+            builder.set_normalized_instruction(normalized)
+            self.bus.publish("normalized", text=normalized)
+            return normalized
+        return self.instruction
+
+    async def _drive(self, builder, toolset, tool_schemas, instruction) -> tuple[Verdict, str]:
         self.bus.publish("status", state="running")
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
-                "content": build_user_instruction(self.instruction, self.target_url, self.data),
+                "content": build_user_instruction(instruction, self.target_url, self.data),
             }
         ]
         max_steps = self.settings.agent.max_steps
