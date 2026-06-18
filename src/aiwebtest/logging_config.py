@@ -20,7 +20,8 @@ def configure_logging(level: str | int = "INFO") -> logging.Logger:
 
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
-    if not logger.handlers:
+    first_setup = not logger.handlers
+    if first_setup:
         handler = logging.StreamHandler()
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -28,6 +29,10 @@ def configure_logging(level: str | int = "INFO") -> logging.Logger:
         logger.addHandler(handler)
     # Don't double-emit through the root logger's handlers.
     logger.propagate = False
+    if first_setup:
+        # A visible confirmation of the effective level so it's easy to tell whether
+        # DEBUG actually took effect (e.g. the env var was set with the right syntax).
+        logger.info("aiwebtest logging configured at level %s", logging.getLevelName(level))
     return logger
 
 

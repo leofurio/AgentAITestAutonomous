@@ -70,8 +70,27 @@ model, message/tool counts, and a summary of each response — text snippets and
 Tool calls and results from the loop are logged too. DEBUG payloads can include data typed
 into the page, so use it only for local debugging.
 
+At startup the active level is printed (`... INFO aiwebtest: aiwebtest logging configured
+at level DEBUG`) so you can confirm it took effect.
+
+The simplest, cross-platform way is the `.env` file (loaded automatically):
+
 ```bash
+echo "AIWEBTEST_LOG_LEVEL=DEBUG" >> .env
+aiwebtest
+```
+
+Or set the variable in the shell — note the syntax differs per shell:
+
+```bash
+# bash / zsh
 AIWEBTEST_LOG_LEVEL=DEBUG aiwebtest
+```
+
+```powershell
+# Windows PowerShell — `VAR=value cmd` does NOT work here; set it first:
+$env:AIWEBTEST_LOG_LEVEL = "DEBUG"
+aiwebtest
 ```
 
 The agent calls tools — `navigate`, `get_page_snapshot`, `click`, `type_text`,
