@@ -175,7 +175,7 @@ async def test_normalizer_pass_rewrites_instruction(settings, browser_page):
         }),
         tool_turn("finish_test", {"verdict": "pass", "summary": "ok"}),
     ]
-    canonical = '{"objective":"log in","steps":["navigate to login"],"expected_results":[]}'
+    canonical = "GOAL: log in\nSTEPS:\n1. navigate to login"
 
     bus = EventBus()
     run_dir = settings.output_dir / "norm"

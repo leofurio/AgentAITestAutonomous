@@ -35,13 +35,13 @@ def test_get_logger_is_child_of_package_logger():
 
 @pytest.mark.asyncio
 async def test_normalizer_emits_debug_trace(caplog):
-    client = _FakeClient('{"objective":"x","steps":["go"]}')
+    client = _FakeClient("GOAL: x\nSTEPS:\n1. go")
     normalizer = InstructionNormalizer(client, Settings(model="m", max_tokens=256))
 
     with caplog.at_level(logging.DEBUG, logger="aiwebtest.normalizer"):
         out = await normalizer.normalize("do x")
 
-    assert out == '{"objective":"x","steps":["go"],"expected_results":[]}'
+    assert out == "GOAL: x\nSTEPS:\n1. go"
     messages = "\n".join(r.getMessage() for r in caplog.records)
     assert "normalize request" in messages
-    assert "canonical JSON" in messages
+    assert "canonical spec" in messages

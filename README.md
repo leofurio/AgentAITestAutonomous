@@ -32,16 +32,27 @@ Chat instruction ─▶ Normalizer ─▶ Claude (tool-use loop) ─▶ Playwrig
 ### Instruction normalization
 
 Before driving the browser, a small **normalizer** pass rewrites the free-form
-instruction (plus the target URL and the data keys) into a canonical **JSON** spec —
-`{"objective", "steps", "expected_results"}`. JSON gives a rigid, machine-validatable
-shape (more deterministic than prose) and is re-serialized minified with a fixed key
-order, so the same intent always yields the same bytes. Feeding the agent this canonical
-spec instead of raw prose reduces run-to-run variance, so the same intent yields the same
-steps and assertions. The pass is conservative: it clarifies and structures, never
-inventing steps or leaking secret values (data is referenced by key, e.g. `{password}`).
-The canonical rewrite is streamed to the UI and recorded in the report. It is best-effort:
-if the model returns anything that is not valid JSON of the expected shape, the run falls
-back to the original instruction.
+instruction (plus the target URL and the data keys) into a canonical, compact plain-text
+spec:
+
+```
+GOAL: <one clause>
+STEPS:
+1. <action>
+2. <action>
+CHECKS:
+- <verifiable check>
+```
+
+This line-oriented form is more token-efficient than JSON (no braces/quotes/repeated keys)
+and far more reliable for models to emit, which cuts down on fallbacks. A tolerant parser
+accepts common label/bullet variants and re-serializes them into the exact form above
+(fixed section order, renumbered steps), so the same intent yields the same bytes. Feeding
+the agent this canonical spec instead of raw prose reduces run-to-run variance. The pass is
+conservative: it clarifies and structures, never inventing steps or leaking secret values
+(data is referenced by key, e.g. `{password}`). The canonical rewrite is streamed to the UI
+and recorded in the report. It is best-effort: if the output has no objective or steps, the
+run falls back to the original instruction.
 
 The pass is also a **token optimizer**: it compresses the request into a terse canonical
 spec (short imperative steps, no filler or restated values), so the downstream loop carries
