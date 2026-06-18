@@ -18,6 +18,11 @@ _SNAPSHOT_JS = r"""
   const elements = [];
   let counter = 0;
 
+  // Clear refs from a previous snapshot first: the DOM changes between snapshots, and
+  // leaving stale attributes makes a ref id (e.g. e2) match several elements, which breaks
+  // ref-based locators with a strict-mode "resolved to N elements" error.
+  document.querySelectorAll('[' + REF_ATTR + ']').forEach((el) => el.removeAttribute(REF_ATTR));
+
   const isVisible = (el) => {
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {

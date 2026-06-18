@@ -118,6 +118,13 @@ def test_to_canonical_spec_treats_lines_after_goal_as_steps():
     assert out == "GOAL: do it\nSTEPS:\n1. first\n2. second"
 
 
+def test_to_canonical_spec_ignores_preamble_before_goal():
+    # A chatty preamble before GOAL must not leak into the steps.
+    raw = "Sure! Here is the normalized spec:\nGOAL: log in\nSTEPS:\n1. go to login"
+    out = _to_canonical_spec(raw)
+    assert out == "GOAL: log in\nSTEPS:\n1. go to login"
+
+
 
 def test_build_request_omits_optional_sections():
     request = _build_request("just text", target_url=None, data=None)
