@@ -21,6 +21,13 @@ from .schemas import Verdict
 
 logger = get_logger("loop")
 
+_FINISH_REMINDER = (
+    "You ended your turn without calling a tool. If the test is complete, call "
+    "finish_test exactly once with the verdict and the JSON summary. If it is not "
+    "complete, continue with the next browser action (snapshot, click, type, assert, ...). "
+    "Do not reply with prose only."
+)
+
 
 class AgentLoop:
     def __init__(
@@ -153,6 +160,10 @@ class AgentLoop:
             }
         ]
         max_steps = self.settings.agent.max_steps
+        # The agent must end with finish_test. If it stops without a tool call we nudge it
+        # to finish (it often just forgot) up to max_retries times; only then do we give up.
+        # A run with no explicit verdict is inconclusive — never an implicit pass.
+        reminders_left = self.settings.agent.max_retries
 
         for step_no in range(max_steps):
             logger.debug("agent turn %d/%d", step_no + 1, max_steps)
@@ -167,8 +178,17 @@ class AgentLoop:
             tool_uses = [b for b in message["content"] if b.get("type") == "tool_use"]
 
             if not tool_uses:
-                # Agent stopped without calling finish_test → treat its text as the summary.
-                return Verdict.PASS, text or "Agent ended without an explicit verdict."
+                if reminders_left > 0:
+                    reminders_left -= 1
+                    logger.debug("agent ended turn without a tool call; reminding to finish_test")
+                    messages.append({"role": "user", "content": _FINISH_REMINDER})
+                    continue
+                # Persisted without finishing → inconclusive, not a pass.
+                logger.warning("agent ended without calling finish_test")
+                return Verdict.ERROR, (
+                    "Agent ended without calling finish_test (no explicit verdict)."
+                    + (f" Last message: {text}" if text else "")
+                )
 
             tool_result_blocks = []
             for block in tool_uses:
