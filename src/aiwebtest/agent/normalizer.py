@@ -35,26 +35,22 @@ from ..logging_config import get_logger
 logger = get_logger("normalizer")
 
 NORMALIZE_SYSTEM_PROMPT = """\
-You normalize web-application test requests into a compact, canonical test spec that \
-another agent will execute against a real browser. Your two goals: make the intent \
-explicit, ordered, and unambiguous so the same request always produces the same test, and \
-keep the spec as short as possible. You are a rewriter and compressor, not a planner.
+You normalize web-application test requests into a compact canonical spec for another \
+agent to execute against a real browser. Make the intent explicit, ordered and unambiguous \
+(same request -> same spec) and keep it minimal. You rewrite and compress; you never plan, \
+add, or guess.
 
-Rules:
-- Preserve the original intent exactly. Do NOT add steps, pages, checks, or data the \
-request does not imply, and do NOT drop anything meaningful. If the request is vague, keep \
-it vague rather than inventing specifics.
-- One atomic, imperative action per step. State each expected outcome as one verifiable \
-check.
-- Refer to provided test data only by its key in braces, e.g. {username}, {password}. \
-Never inline secret values.
-- Terse phrasing: short imperatives, drop articles and filler. Prefer neutral verbs: \
-navigate, click, type, select, press, wait for, verify.
-- Do not repeat the target URL, data values, or the same element across steps. Omit \
-obvious mechanics (taking snapshots, waiting for loads) unless the request depends on them. \
-No duplication between STEPS and CHECKS.
+Hard rules:
+- Preserve intent exactly: never add or drop steps, checks, or data. If the request is \
+vague, keep it vague — do not invent specifics.
+- One imperative action per step; one verifiable outcome per check.
+- Reference test data only by its key in braces, e.g. {username}, {password}. Never inline \
+secret values.
+- Terse: short imperatives, drop articles and filler, never repeat the URL, an element, or \
+a data value. Omit obvious mechanics (snapshots, waiting) unless the request depends on them.
 
-Output ONLY this plain-text format — no JSON, no markdown, no preamble, no commentary:
+Format — output EXACTLY this and NOTHING else. The first line MUST start with "GOAL:". \
+No preamble, no closing remarks, no explanations, no JSON, no markdown fences:
 GOAL: <one short clause>
 STEPS:
 1. <action>
@@ -62,7 +58,7 @@ STEPS:
 CHECKS:
 - <verifiable check>
 
-Omit the CHECKS section entirely if the request states no expected outcome.
+Omit the entire CHECKS section if the request states no expected outcome.
 
 Example:
 GOAL: sign in succeeds
@@ -126,7 +122,7 @@ def _to_canonical_spec(text: str) -> str | None:
     objective = ""
     steps: list[str] = []
     checks: list[str] = []
-    section = "steps"  # content before any header (but after GOAL) is treated as steps
+    section = "steps"  # content after GOAL (before any header) is treated as steps
 
     for raw_line in payload.splitlines():
         line = raw_line.strip()
@@ -137,6 +133,10 @@ def _to_canonical_spec(text: str) -> str | None:
         if low.startswith(_GOAL_LABELS):
             objective = line.split(":", 1)[1].strip()
             section = "steps"
+            continue
+        if not objective:
+            # Ignore any preamble the model emits before the GOAL line, so it never
+            # leaks into the steps (a common cause of corrupted specs).
             continue
         header = low.rstrip(":").strip()
         if header in _STEPS_HEADERS:
