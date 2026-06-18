@@ -281,3 +281,27 @@ async def test_openrouter_provider_sends_tool_results_as_chat_tool_messages():
         "tool_call_id": "call_1",
         "content": "Loaded",
     }
+
+
+@pytest.mark.asyncio
+async def test_openrouter_omits_tools_when_none_given():
+    # The normalizer pass calls with no tools: tools/tool_choice must be omitted, or
+    # several OpenAI-compatible backends reject the call / return empty content.
+    client = _FakeOpenRouter()
+    provider = OpenRouterAgentClient(client, _settings())
+
+    await provider.complete([{"role": "user", "content": "normalize this"}], [], "system")
+
+    call = client.chat.completions.calls[0]
+    assert "tools" not in call
+    assert "tool_choice" not in call
+
+
+@pytest.mark.asyncio
+async def test_openai_omits_tools_when_none_given():
+    client = _FakeOpenAI()
+    provider = OpenAIAgentClient(client, _settings())
+
+    await provider.complete([{"role": "user", "content": "normalize this"}], [], "system")
+
+    assert "tools" not in client.responses.calls[0]
