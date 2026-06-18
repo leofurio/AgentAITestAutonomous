@@ -205,6 +205,32 @@ async def test_normalizer_pass_rewrites_instruction(settings, browser_page):
     assert data["normalized_instruction"] == canonical
 
 
+async def test_reminder_lets_agent_finish_after_prose_only_turn(settings, browser_page):
+    # If the agent ends a turn with prose and no tool call, the loop nudges it to call
+    # finish_test instead of silently passing. Here it complies on the next turn → PASS.
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        text_turn("I believe the test is complete."),
+        tool_turn("finish_test", {"verdict": "pass", "summary": "done"}),
+    ]
+    report, _events, _run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="nudge")
+    assert report.verdict == Verdict.PASS
+
+
+async def test_no_finish_test_yields_error_not_pass(settings, browser_page):
+    # An agent that never calls finish_test, even after the reminders, is inconclusive —
+    # it must NOT be reported as an implicit pass. settings.agent.max_retries == 2, so the
+    # loop reminds twice and gives up on the third prose-only turn.
+    turns = [
+        text_turn("Looks fine to me."),
+        text_turn("Still looks fine."),
+        text_turn("Yep, done."),
+    ]
+    report, _events, _run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="noverdict")
+    assert report.verdict == Verdict.ERROR
+    assert "without calling finish_test" in report.summary
+
+
 async def test_failed_assertion_yields_fail_verdict(settings, browser_page):
     user, pwd, btn = await _discover_refs(browser_page)
     turns = [
