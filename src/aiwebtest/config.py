@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     # /api/playwright/execute runs arbitrary Python: keep it opt-out and local-only.
     code_runner_enabled: bool = True
     code_runner_allow_remote: bool = False
+    # Logging verbosity for the aiwebtest logger. Set DEBUG to trace the normalization
+    # rewrite and every agent (LLM) call. Env: AIWEBTEST_LOG_LEVEL.
+    log_level: str = "INFO"
     model: str = "claude-opus-4-8"
     # medium balances speed and quality for browser-driving; raise to high/xhigh for
     # harder sites, or lower to low for the fastest, simplest runs.

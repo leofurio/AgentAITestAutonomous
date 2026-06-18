@@ -62,6 +62,18 @@ AIWEBTEST_NORMALIZER_MAX_TOKENS=1024           # cap the canonical spec size
 AIWEBTEST_NORMALIZER_EFFORT=low                # cheaper rewrite (empty = reuse effort)
 ```
 
+### Debug logging
+
+Set `log_level: DEBUG` (or `AIWEBTEST_LOG_LEVEL=DEBUG`) to trace the normalization rewrite
+(request, raw model output, canonical JSON or fallback) and every agent call (provider,
+model, message/tool counts, and a summary of each response — text snippets and tool calls).
+Tool calls and results from the loop are logged too. DEBUG payloads can include data typed
+into the page, so use it only for local debugging.
+
+```bash
+AIWEBTEST_LOG_LEVEL=DEBUG aiwebtest
+```
+
 The agent calls tools — `navigate`, `get_page_snapshot`, `click`, `type_text`,
 `select_option`, `press_key`, `wait_for`, `screenshot`, `get_text`, `assert_that`,
 `finish_test`. Assertions are evaluated **deterministically in Python** (not by the model)

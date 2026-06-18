@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..config import Settings
+from ..logging_config import get_logger
+
+logger = get_logger("providers")
 
 AgentBlock = dict[str, Any]
 AgentMessage = dict[str, Any]
@@ -49,12 +52,15 @@ class AnthropicAgentClient:
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": self.settings.effort},
         }
+        _log_request("anthropic", self.settings.model, messages, tool_schemas)
         async with self.client.messages.stream(**kwargs) as stream:
             async for _ in stream.text_stream:
                 # Text deltas are surfaced from the final message; iterate to drive streaming.
                 pass
             message = await stream.get_final_message()
-        return {"role": "assistant", "content": _normalize_anthropic_blocks(message.content)}
+        content = _normalize_anthropic_blocks(message.content)
+        _log_response("anthropic", content)
+        return {"role": "assistant", "content": content}
 
 
 @dataclass
@@ -81,9 +87,12 @@ class OpenAIAgentClient:
             kwargs["previous_response_id"] = self.previous_response_id
         else:
             kwargs["instructions"] = system_prompt
+        _log_request("openai", self.settings.model, messages, tool_schemas)
         response = await self.client.responses.create(**kwargs)
         self.previous_response_id = getattr(response, "id", None)
-        return {"role": "assistant", "content": _normalize_openai_output(response)}
+        content = _normalize_openai_output(response)
+        _log_response("openai", content)
+        return {"role": "assistant", "content": content}
 
     def _next_input(self, messages: list[AgentMessage]) -> Any:
         if not self.previous_response_id:
@@ -117,6 +126,7 @@ class OpenRouterAgentClient:
         tool_schemas: list[dict[str, Any]],
         system_prompt: str,
     ) -> AgentMessage:
+        _log_request("openrouter", self.settings.model, messages, tool_schemas)
         completion = await self.client.chat.completions.create(
             model=self.settings.model,
             messages=_to_openai_chat_messages(messages, system_prompt),
@@ -124,7 +134,9 @@ class OpenRouterAgentClient:
             tool_choice="auto",
             max_tokens=self.settings.max_tokens,
         )
-        return {"role": "assistant", "content": _normalize_openai_chat_completion(completion)}
+        content = _normalize_openai_chat_completion(completion)
+        _log_response("openrouter", content)
+        return {"role": "assistant", "content": content}
 
 
 def ensure_agent_client(client: Any, settings: Settings) -> AgentClient:
@@ -373,3 +385,37 @@ def _get(block: Any, name: str, default: Any = None) -> Any:
     if isinstance(block, dict):
         return block.get(name, default)
     return getattr(block, name, default)
+
+
+def _log_request(
+    provider: str,
+    model: str,
+    messages: list[AgentMessage],
+    tool_schemas: list[dict[str, Any]],
+) -> None:
+    if not logger.isEnabledFor(10):  # logging.DEBUG
+        return
+    logger.debug(
+        "%s call: model=%s messages=%d tools=%d", provider, model, len(messages),
+        len(tool_schemas),
+    )
+
+
+def _log_response(provider: str, blocks: list[AgentBlock]) -> None:
+    if not logger.isEnabledFor(10):  # logging.DEBUG
+        return
+    logger.debug("%s response: %s", provider, _summarize_blocks(blocks))
+
+
+def _summarize_blocks(blocks: list[AgentBlock]) -> str:
+    parts: list[str] = []
+    for block in blocks:
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append(f"text={block.get('text', '')[:300]!r}")
+        elif block_type == "tool_use":
+            args = json.dumps(block.get("input", {}), ensure_ascii=False)
+            parts.append(f"tool_use={block.get('name')}({args})")
+        elif block_type in {"thinking", "redacted_thinking"}:
+            parts.append(block_type)
+    return " | ".join(parts) if parts else "(no content)"

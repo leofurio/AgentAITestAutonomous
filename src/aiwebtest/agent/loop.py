@@ -13,10 +13,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..config import Settings
+from ..logging_config import get_logger
 from .events import EventBus
 from .prompts import SYSTEM_PROMPT, build_user_instruction
 from .providers import ensure_agent_client
 from .schemas import Verdict
+
+logger = get_logger("loop")
 
 
 class AgentLoop:
@@ -115,11 +118,13 @@ class AgentLoop:
         to a normalizer error.
         """
         if not self.settings.agent.normalize_instruction or self.normalizer_factory is None:
+            logger.debug("normalization disabled or unavailable; using raw instruction")
             return self.instruction
 
         from .normalizer import InstructionNormalizer
 
         self.bus.publish("status", state="normalizing")
+        logger.debug("normalizing instruction: %r", self.instruction)
         try:
             client = ensure_agent_client(self.normalizer_factory(), self.normalizer_settings)
             normalizer = InstructionNormalizer(client, self.normalizer_settings)
@@ -127,13 +132,16 @@ class AgentLoop:
                 self.instruction, self.target_url, self.data
             )
         except Exception as exc:  # noqa: BLE001 - normalization must never abort a run
+            logger.warning("normalization skipped: %s", exc)
             self.bus.publish("warning", message=f"Instruction normalization skipped: {exc}")
             return self.instruction
 
         if normalized and normalized.strip() != self.instruction.strip():
             builder.set_normalized_instruction(normalized)
             self.bus.publish("normalized", text=normalized)
+            logger.info("instruction normalized to: %s", normalized)
             return normalized
+        logger.debug("normalization produced no change; using raw instruction")
         return self.instruction
 
     async def _drive(self, builder, toolset, tool_schemas, instruction) -> tuple[Verdict, str]:
@@ -146,7 +154,8 @@ class AgentLoop:
         ]
         max_steps = self.settings.agent.max_steps
 
-        for _ in range(max_steps):
+        for step_no in range(max_steps):
+            logger.debug("agent turn %d/%d", step_no + 1, max_steps)
             message = await self.client.complete(messages, tool_schemas, SYSTEM_PROMPT)
 
             text = _collect_text(message)
@@ -166,8 +175,13 @@ class AgentLoop:
                 tool_input = dict(block["input"])
                 step = builder.add_tool_call(block["name"], tool_input)
                 self.bus.publish("step", index=step.index, tool=block["name"], input=tool_input)
+                logger.debug("tool call: %s(%s)", block["name"], tool_input)
 
                 outcome = await toolset.dispatch(block["name"], tool_input)
+                logger.debug(
+                    "tool result: %s -> %s%s", block["name"], outcome.summary,
+                    " [error]" if outcome.is_error else "",
+                )
 
                 if outcome.locator_hint:
                     step.locator_hint = outcome.locator_hint

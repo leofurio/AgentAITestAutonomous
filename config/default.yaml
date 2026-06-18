@@ -2,6 +2,7 @@ agent_provider: anthropic
 code_runner_enabled: true       # POST /api/playwright/execute (runs Python on this machine)
 code_runner_allow_remote: false # keep false: only local callers may use the code runner
 model: claude-opus-4-8
+log_level: INFO                 # set DEBUG to trace normalization and every agent (LLM) call
 normalizer_provider: ""         # provider for the instruction normalizer (empty = agent_provider)
 normalizer_model: ""            # model for the instruction normalizer (empty = model)
 normalizer_max_tokens: 1024     # tight output cap → compact spec, fewer downstream input tokens
