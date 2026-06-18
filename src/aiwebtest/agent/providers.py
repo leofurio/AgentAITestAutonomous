@@ -47,11 +47,14 @@ class AnthropicAgentClient:
             "system": [
                 {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
             ],
-            "tools": tool_schemas,
             "messages": _with_cache_breakpoint(messages),
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": self.settings.effort},
         }
+        # Omit tools entirely when there are none (e.g. the normalizer pass): an empty
+        # tools array is rejected / yields no content on several APIs.
+        if tool_schemas:
+            kwargs["tools"] = tool_schemas
         _log_request("anthropic", self.settings.model, messages, tool_schemas)
         async with self.client.messages.stream(**kwargs) as stream:
             async for _ in stream.text_stream:
@@ -79,10 +82,11 @@ class OpenAIAgentClient:
     ) -> AgentMessage:
         kwargs: dict[str, Any] = {
             "model": self.settings.model,
-            "tools": [_to_openai_tool(tool) for tool in tool_schemas],
             "input": self._next_input(messages),
             "max_output_tokens": self.settings.max_tokens,
         }
+        if tool_schemas:
+            kwargs["tools"] = [_to_openai_tool(tool) for tool in tool_schemas]
         if self.previous_response_id:
             kwargs["previous_response_id"] = self.previous_response_id
         else:
@@ -127,13 +131,18 @@ class OpenRouterAgentClient:
         system_prompt: str,
     ) -> AgentMessage:
         _log_request("openrouter", self.settings.model, messages, tool_schemas)
-        completion = await self.client.chat.completions.create(
-            model=self.settings.model,
-            messages=_to_openai_chat_messages(messages, system_prompt),
-            tools=[_to_openai_chat_tool(tool) for tool in tool_schemas],
-            tool_choice="auto",
-            max_tokens=self.settings.max_tokens,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self.settings.model,
+            "messages": _to_openai_chat_messages(messages, system_prompt),
+            "max_tokens": self.settings.max_tokens,
+        }
+        # Only send tools/tool_choice when there are tools: an empty tools array with
+        # tool_choice="auto" is rejected / returns empty content on several backends
+        # (this is what made the tool-less normalizer pass come back with no content).
+        if tool_schemas:
+            kwargs["tools"] = [_to_openai_chat_tool(tool) for tool in tool_schemas]
+            kwargs["tool_choice"] = "auto"
+        completion = await self.client.chat.completions.create(**kwargs)
         content = _normalize_openai_chat_completion(completion)
         _log_response("openrouter", content)
         return {"role": "assistant", "content": content}
