@@ -152,7 +152,8 @@ def _candidates(page, hint):
     if name:
         out.append(page.get_by_text(name, exact=False).first)
     if hint.get("ref"):
-        out.append(page.locator(f'[data-aiwebtest-ref="{hint["ref"]}"]'))
+        # .first: stale refs from older runs could still match more than one node.
+        out.append(page.locator(f'[data-aiwebtest-ref="{hint["ref"]}"]').first)
     return out
 
 
@@ -206,8 +207,13 @@ async def assert_that(page, condition, target=None, expected=None, description="
     # recorded, the remaining steps still execute, and the final verdict is "fail".
     global PASSED_ASSERTIONS
     await tag(page)
-    loc = await resolve(page, target) if target else None
-    passed, actual = await _evaluate_assertion(page, loc, condition, expected)
+    try:
+        loc = await resolve(page, target) if target else None
+        passed, actual = await _evaluate_assertion(page, loc, condition, expected)
+    except Exception as exc:
+        # A bad/recorded assertion (e.g. value_equals on a non-input, or an unresolvable
+        # target) must fail softly and let the replay continue — never abort the run.
+        passed, actual = False, f'{type(exc).__name__}: {exc}'
     shot = None
     try:
         shot = next_shot_path()
