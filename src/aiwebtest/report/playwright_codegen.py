@@ -15,6 +15,7 @@ is not importable the replay still works and only prints to stdout.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ..agent.schemas import StepKind, TestReport
@@ -377,6 +378,51 @@ def _hint_for(step, ref: str) -> dict[str, Any]:
     return {**(step.locator_hint or {}), "ref": ref}
 
 
+_CSS_IDENT = re.compile(r"^[A-Za-z_][\w-]*$")
+
+# Mirror of the ROLE_MAP / ROLE_OK baked into the generated helper body, used to
+# render the idiomatic get_by_role locator shown in the step comments.
+_ROLE_MAP = {
+    "text": "textbox", "email": "textbox", "password": "textbox", "search": "textbox",
+    "tel": "textbox", "url": "textbox", "number": "spinbutton",
+    "checkbox": "checkbox", "radio": "radio",
+}
+_ROLE_OK = {"button", "link", "heading", "textbox", "checkbox", "radio", "tab", "menuitem"}
+
+
+def _dq(value: str) -> str:
+    """A double-quoted Python string literal (nicer than repr for comments)."""
+    return json.dumps(value)
+
+
+def _idiomatic_locator(hint: dict[str, Any] | None) -> str | None:
+    """Best-guess *idiomatic* Playwright locator for a recorded descriptor.
+
+    Documentation only — emitted as a comment above each step so the generated
+    script reads like hand-written Playwright and can be adopted into a
+    maintained suite. The runtime still resolves through ``resolve()``, which
+    probes the full candidate chain; this shows the single strongest locator a
+    developer would likely write by hand. Mirrors ``_candidates`` priority.
+    """
+    hint = hint or {}
+    if hint.get("testid"):
+        return f"page.get_by_test_id({_dq(hint['testid'])})"
+    el_id = hint.get("id")
+    if el_id:
+        selector = f"#{el_id}" if _CSS_IDENT.match(el_id) else f'[id="{el_id}"]'
+        return f"page.locator({_dq(selector)})"
+    if hint.get("attr_name") and hint.get("tag") in ("input", "select", "textarea"):
+        selector = f'[name="{hint["attr_name"]}"]'
+        return f"page.locator({_dq(selector)})"
+    role = _ROLE_MAP.get(hint.get("role"), hint.get("role"))
+    name = hint.get("name")
+    if role in _ROLE_OK and name:
+        return f"page.get_by_role({_dq(role)}, name={_dq(name)}, exact=False)"
+    if name:
+        return f"page.get_by_text({_dq(name)}, exact=False)"
+    return None
+
+
 def _render_steps(report: TestReport) -> list[str]:
     lines: list[str] = []
     replayable = [s for s in report.steps if s.kind == StepKind.TOOL_CALL and s.tool_name]
@@ -390,6 +436,11 @@ def _render_steps(report: TestReport) -> list[str]:
         # Recorder mirrors each call into report.json like the live run.
         lines.append(f"current = note('step {step_no}/{total}: {tool}')")
         lines.append(f"REC.tool_call({_py(tool)}, {_py(args)}, hint={_py(step.locator_hint)})")
+        # Show the idiomatic hand-written locator so the script reads as adoptable
+        # Playwright; the resolve() call below still probes the robust fallback chain.
+        idiomatic = _idiomatic_locator(hint) if hint else None
+        if idiomatic:
+            lines.append(f"# locator: {idiomatic}")
 
         if tool == "navigate":
             lines.append(f"await page.goto({_py(args.get('url', ''))}, wait_until='load')")

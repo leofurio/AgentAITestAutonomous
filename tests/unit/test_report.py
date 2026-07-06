@@ -88,6 +88,53 @@ def test_playwright_replay_probes_locator_candidates(tmp_path: Path):
     assert "loc = await resolve(page," in script
 
 
+def test_playwright_replay_annotates_idiomatic_locators(tmp_path: Path):
+    # For the script to be *adoptable* as hand-maintained Playwright (not just a
+    # replay engine), each element-targeting step carries a comment with the
+    # strongest idiomatic locator, derived deterministically from the same hint
+    # that drives resolve(). The robust resolve() call is still emitted below it.
+    b = _builder(tmp_path)
+    step = b.add_tool_call("type_text", {"ref": "e1", "text": "bob"})
+    step.locator_hint = {"id": "", "tag": "input", "role": "text",
+                         "name": "", "attr_name": "user", "testid": ""}
+    step = b.add_tool_call("click", {"ref": "e2"})
+    step.locator_hint = {"id": "submit", "tag": "button", "role": "button",
+                         "name": "Login", "attr_name": "", "testid": ""}
+    step = b.add_tool_call("click", {"ref": "e3"})
+    step.locator_hint = {"id": "", "tag": "button", "role": "button",
+                         "name": "Sign in", "attr_name": "", "testid": "go"}
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert '# locator: page.locator("[name=\\"user\\"]")' in script  # name attr wins for inputs
+    assert '# locator: page.locator("#submit")' in script            # simple id → #id
+    assert '# locator: page.get_by_test_id("go")' in script          # testid is strongest
+    # The comment documents; the robust runtime resolution is unchanged.
+    assert "loc = await resolve(page," in script
+
+
+def test_idiomatic_locator_mirrors_candidate_priority():
+    from aiwebtest.report.playwright_codegen import _idiomatic_locator
+
+    # testid beats everything; role maps input types to ARIA roles; a non-CSS id
+    # falls back to an [id="..."] attribute selector; text is the last resort.
+    assert _idiomatic_locator(
+        {"testid": "t", "id": "i", "role": "button", "name": "N", "tag": "button"}
+    ) == 'page.get_by_test_id("t")'
+    assert _idiomatic_locator(
+        {"id": "weird id!", "role": "", "name": "", "tag": "div"}
+    ) == 'page.locator("[id=\\"weird id!\\"]")'
+    assert _idiomatic_locator(
+        {"role": "button", "name": "Submit", "tag": "button"}
+    ) == 'page.get_by_role("button", name="Submit", exact=False)'
+    assert _idiomatic_locator(
+        {"role": "", "name": "Just text", "tag": "span"}
+    ) == 'page.get_by_text("Just text", exact=False)'
+    assert _idiomatic_locator({"role": "", "name": "", "tag": "div"}) is None
+
+
 def test_playwright_replay_launches_like_the_live_run(tmp_path: Path):
     # The replay must use the same browser channel as the recorded run (e.g. the
     # installed Chrome) and fall back to the bundled Chromium, mirroring
