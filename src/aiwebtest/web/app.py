@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings, load_settings, normalizer_settings
 from ..logging_config import configure_logging
+from ..suite import SuiteRunner, SuiteStore
 from .manager import RunManager
 from .routes import router as api_router
 from .ws import router as ws_router
@@ -92,6 +93,8 @@ def create_app(
         normalizer_factory=normalizer_factory or (lambda: build_client(n_settings)),
         normalizer_settings=n_settings,
     )
+    app.state.suite_store = SuiteStore(settings.output_dir / "suite.json")
+    app.state.suite_runner = SuiteRunner(app.state.manager, app.state.suite_store)
 
     app.include_router(api_router)
     app.include_router(ws_router)

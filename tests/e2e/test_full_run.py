@@ -122,6 +122,76 @@ async def test_generated_replay_script_runs(settings, browser_page):
     assert "PASS:" in stdout.decode(errors="replace")
 
 
+async def test_generated_script_passes_under_pytest(settings, browser_page):
+    # The same artifact is dual-use: `pytest playwright_test.py` must collect the
+    # test_replay() entrypoint and pass — this is what makes a recorded run a
+    # drop-in member of a CI suite.
+    user, pwd, btn = await _discover_refs(browser_page)
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        tool_turn("get_page_snapshot", {}),
+        tool_turn("type_text", {"ref": user, "text": "demo"}),
+        tool_turn("type_text", {"ref": pwd, "text": "secret"}),
+        tool_turn("click", {"ref": btn}),
+        tool_turn("assert_that", {
+            "description": "welcome shown", "condition": "text_contains",
+            "expected": "Welcome, demo",
+        }),
+        tool_turn("finish_test", {"verdict": "pass", "summary": "ok"}),
+    ]
+    _report, _events, run_dir = await _run(settings, FakeAnthropicClient(turns), run_id="aspytest")
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "pytest", "playwright_test.py", "-q",
+        "-p", "no:cacheprovider", "--noconftest",
+        cwd=str(run_dir),
+        env={**os.environ, "AIWEBTEST_REPLAY_HEADLESS": "1"},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    out = stdout.decode(errors="replace")
+    assert proc.returncode == 0, out + stderr.decode(errors="replace")
+    assert "1 passed" in out
+
+
+async def test_suite_replays_a_recorded_run(settings, browser_page):
+    # Suite integration end-to-end: a completed live run becomes a saved test whose
+    # replay re-executes the REAL generated script in a subprocess — no LLM involved.
+    from types import SimpleNamespace
+
+    from aiwebtest.suite import SuiteRunner, SuiteStore
+
+    user, pwd, btn = await _discover_refs(browser_page)
+    turns = [
+        tool_turn("navigate", {"url": LOGIN_URL}),
+        tool_turn("get_page_snapshot", {}),
+        tool_turn("type_text", {"ref": user, "text": "demo"}),
+        tool_turn("type_text", {"ref": pwd, "text": "secret"}),
+        tool_turn("click", {"ref": btn}),
+        tool_turn("assert_that", {
+            "description": "welcome shown", "condition": "text_contains",
+            "expected": "Welcome, demo",
+        }),
+        tool_turn("finish_test", {"verdict": "pass", "summary": "ok"}),
+    ]
+    await _run(settings, FakeAnthropicClient(turns), run_id="suiterec")
+
+    store = SuiteStore(settings.output_dir / "suite.json")
+    test = store.add("login flow", "Log in and verify the welcome message.",
+                     target_url=LOGIN_URL, source_run_id="suiterec")
+    runner = SuiteRunner(SimpleNamespace(settings=settings), store)
+
+    record = await runner.run_test(test.test_id, mode="replay")
+
+    assert (record.mode, record.verdict) == ("replay", "pass")
+    assert "assertion" in record.summary  # summary comes from the replay's own report
+    # The replay produced the same artifacts as a live run, in its own run dir.
+    replay_dir = settings.output_dir / record.run_id
+    assert json.loads((replay_dir / "report.json").read_text())["verdict"] == "pass"
+    assert store.get(test.test_id).history[-1].verdict == "pass"
+
+
 async def test_replay_continues_after_failed_assertion(settings, browser_page):
     # A failed assertion must not abort the replay: like the live agent run, the
     # remaining steps (including later assertions) still execute, and the script

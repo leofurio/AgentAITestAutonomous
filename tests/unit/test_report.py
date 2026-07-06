@@ -198,7 +198,26 @@ def test_playwright_replay_continues_after_a_failed_assertion(tmp_path: Path):
     compile(script, "generated_replay.py", "exec")
     assert "raise AssertionError" not in script                # soft assertions only
     assert "FAILED_ASSERTIONS.append(description or condition)" in script
-    assert "if failure is not None or FAILED_ASSERTIONS:" in script  # exit code stays 1
+    assert "if verdict != 'pass':" in script                   # exit code stays 1
+
+
+def test_playwright_replay_is_pytest_collectable(tmp_path: Path):
+    # The artifact is named playwright_test.py, which matches pytest's *_test.py
+    # collection pattern; a test_replay() entrypoint makes the same file dual-use:
+    # `python playwright_test.py` (CLI, exit code) and `pytest playwright_test.py`
+    # (CI suite member, assertion failure carries the outcome message).
+    b = _builder(tmp_path)
+    b.add_tool_call("navigate", {"url": "https://example.com"})
+    report = b.finalize(Verdict.PASS, "ok")
+
+    script = generate_playwright_script(report)
+
+    compile(script, "generated_replay.py", "exec")
+    assert "def test_replay():" in script
+    assert "assert verdict == 'pass', outcome" in script       # message surfaces in pytest
+    assert "return verdict, outcome" in script                 # main() reports, callers decide
+    # No module-level side effects: the replay only runs from an entrypoint.
+    assert "if __name__ == '__main__':" in script
 
 
 def test_playwright_replay_records_a_report_like_the_live_run(tmp_path: Path):
