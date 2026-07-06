@@ -34,6 +34,19 @@ class CodeRunRequest(BaseModel):
     timeout_seconds: int = 120
 
 
+class SuiteSaveRequest(BaseModel):
+    name: str
+    instruction: str
+    target_url: str | None = None
+    data: dict | None = None
+    # The completed run whose playwright_test.py becomes the test's recording.
+    source_run_id: str | None = None
+
+
+class SuiteRunModeRequest(BaseModel):
+    mode: str = "auto"  # auto | replay | agent
+
+
 class CodeRunResponse(BaseModel):
     exit_code: int | None
     stdout: str
@@ -87,6 +100,70 @@ async def get_playwright_script(run_id: str, request: Request) -> FileResponse:
 async def get_screenshot(run_id: str, filename: str, request: Request) -> FileResponse:
     safe = Path(filename).name  # strip any directory components
     return FileResponse(_artifact(request, run_id, f"screenshots/{safe}"), media_type="image/png")
+
+
+# --- Suite: saved tests, history, replay / self-healing re-runs -------------------
+
+
+@router.get("/suite")
+async def list_suite(request: Request) -> dict:
+    store = request.app.state.suite_store
+    return {"tests": [t.model_dump(mode="json") for t in store.list()]}
+
+
+@router.post("/suite")
+async def save_suite_test(req: SuiteSaveRequest, request: Request) -> dict:
+    if not req.name.strip():
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    if not req.instruction.strip():
+        raise HTTPException(status_code=422, detail="instruction must not be empty")
+    source = req.source_run_id
+    if source is not None and not _RUN_ID_RE.fullmatch(source):
+        raise HTTPException(status_code=422, detail="invalid source_run_id")
+    store = request.app.state.suite_store
+    test = store.add(
+        name=req.name.strip(), instruction=req.instruction,
+        target_url=req.target_url, data=req.data, source_run_id=source,
+    )
+    return test.model_dump(mode="json")
+
+
+@router.delete("/suite/{test_id}")
+async def delete_suite_test(test_id: str, request: Request) -> dict:
+    if not request.app.state.suite_store.remove(test_id):
+        raise HTTPException(status_code=404, detail="suite test not found")
+    return {"deleted": test_id}
+
+
+@router.post("/suite/{test_id}/run")
+async def run_suite_test(test_id: str, req: SuiteRunModeRequest, request: Request) -> dict:
+    from ..suite import RUN_MODES
+
+    if req.mode not in RUN_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of {RUN_MODES}")
+    runner = request.app.state.suite_runner
+    try:
+        # Awaited to completion: replays are quick; agent runs can take minutes,
+        # which is acceptable for a local tool (the UI disables the button).
+        record = await runner.run_test(test_id, mode=req.mode)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="suite test not found") from None
+    return record.model_dump(mode="json")
+
+
+@router.post("/suite/run_all")
+async def run_suite(req: SuiteRunModeRequest, request: Request) -> dict:
+    from ..suite import RUN_MODES
+
+    if req.mode not in RUN_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of {RUN_MODES}")
+    records = await request.app.state.suite_runner.run_all(mode=req.mode)
+    passed = sum(1 for r in records if r.verdict == "pass")
+    return {
+        "total": len(records),
+        "passed": passed,
+        "records": [r.model_dump(mode="json") for r in records],
+    }
 
 
 @router.post("/playwright/execute", response_model=CodeRunResponse)

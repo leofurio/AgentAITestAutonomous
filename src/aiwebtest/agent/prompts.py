@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
-
 SYSTEM_PROMPT = """\
 You are an autonomous web-application testing agent. You drive a real web browser \
 to execute a test described in natural language, then report the outcome. You are \

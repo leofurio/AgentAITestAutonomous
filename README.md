@@ -21,7 +21,13 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
   element step is annotated with a `# locator:` comment showing the strongest idiomatic
   Playwright locator (`get_by_test_id` / `#id` / `get_by_role` / `get_by_text`), so the
   script reads like hand-written Playwright and can be adopted into a maintained suite,
-  while the runtime still resolves through the robust candidate chain.
+  while the runtime still resolves through the robust candidate chain. The artifact is
+  **dual-use**: `python playwright_test.py` replays it from the CLI (exit code mirrors
+  the verdict), and `pytest playwright_test.py` collects its `test_replay()` entrypoint,
+  making a recorded run a drop-in member of any pytest CI suite.
+- **Suite**: save any test (optionally attached to a completed run's recording) into a
+  persistent suite with per-test **run history**, re-run tests individually or in batch,
+  and let broken recordings **self-heal** (see below).
 
 ## How it works
 
@@ -76,6 +82,38 @@ AIWEBTEST_AGENT__NORMALIZE_INSTRUCTION=false   # disable
 AIWEBTEST_NORMALIZER_MODEL=claude-haiku-4-5    # normalize on a lighter model
 AIWEBTEST_NORMALIZER_MAX_TOKENS=1024           # cap the canonical spec size
 AIWEBTEST_NORMALIZER_EFFORT=low                # cheaper rewrite (empty = reuse effort)
+```
+
+### Suite: saved tests, batch runs, self-healing
+
+The agent is for **authoring** a test; the suite is for **reusing** it. A suite test is
+a saved instruction (plus target URL / data) with a pointer to its latest *recording* —
+the run whose deterministic `playwright_test.py` replays it without an AI model. The
+suite lives in `runs/suite.json` and every executed run is appended to the test's
+history, so you can see whether a test passed yesterday and whether it needed healing.
+
+Three run modes:
+
+- `replay` — execute the recorded script (fast, free, deterministic).
+- `agent` — full agentic run; a **passing** agent run becomes the new recording.
+- `auto` (default) — replay first; if the replay **errors** (stale locator, crash — the
+  *test* broke, not the app) it self-heals: the agent re-runs the saved instruction and
+  re-records the script. A replay that *fails its assertions* is reported as a genuine
+  fail — healing never masks a real regression.
+
+In the UI, use **Save form as suite test** (the last completed live run is attached as
+the recording) and the per-test ▶ auto / 🤖 agent buttons, or **Run all (auto)** for a
+batch regression pass. The same operations are available over HTTP:
+
+```bash
+curl -X POST localhost:8000/api/suite -H 'Content-Type: application/json' \
+  -d '{"name": "login", "instruction": "log in and verify the dashboard",
+       "target_url": "https://example.com", "source_run_id": "<run id>"}'
+curl localhost:8000/api/suite                          # list tests + history
+curl -X POST localhost:8000/api/suite/<test_id>/run \
+  -H 'Content-Type: application/json' -d '{"mode": "auto"}'
+curl -X POST localhost:8000/api/suite/run_all \
+  -H 'Content-Type: application/json' -d '{"mode": "auto"}'   # batch: {total, passed}
 ```
 
 ### Debug logging
@@ -142,7 +180,8 @@ AIWEBTEST_BROWSER__HEADLESS=true pytest
 ```
 
 The end-to-end test drives the full loop against a local fixture site using a **fake LLM**
-(scripted tool calls) — no API key or network required.
+(scripted tool calls) — no API key or network required. The same suite (plus `ruff check`)
+runs in CI on every push and pull request via `.github/workflows/ci.yml`.
 
 ## Configuration
 
