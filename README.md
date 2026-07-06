@@ -16,7 +16,12 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
   that can be downloaded or pasted into the local runner at `/runner`. It launches the
   same browser channel as the live run (e.g. installed Chrome) and falls back to the
   bundled Chromium; override with `AIWEBTEST_REPLAY_CHANNEL`, run headless with
-  `AIWEBTEST_REPLAY_HEADLESS=1`.
+  `AIWEBTEST_REPLAY_HEADLESS=1`. The script is generated **deterministically — no model
+  in the loop** — so it runs identically every time (CI, offline, zero API cost). Each
+  element step is annotated with a `# locator:` comment showing the strongest idiomatic
+  Playwright locator (`get_by_test_id` / `#id` / `get_by_role` / `get_by_text`), so the
+  script reads like hand-written Playwright and can be adopted into a maintained suite,
+  while the runtime still resolves through the robust candidate chain.
 
 ## How it works
 
