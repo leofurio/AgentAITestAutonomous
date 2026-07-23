@@ -180,6 +180,93 @@ async def test_auto_heals_a_broken_recording_via_agent_rerun(tmp_path: Path, set
     assert store.get(test.test_id).source_run_id == record.run_id
 
 
+def _healable_recording(settings, run_id: str) -> None:
+    """A broken replay stub PLUS a readable report.json the heal tier re-executes."""
+    from aiwebtest.agent.schemas import TestReport
+
+    _stub_recording(settings.output_dir, run_id, _BROKEN_REPLAY)
+    (settings.output_dir / run_id / "report.json").write_text(
+        TestReport(run_id=run_id, instruction="do it", model="rec").model_dump_json(),
+        encoding="utf-8",
+    )
+
+
+class _FakeReplayer:
+    """Stands in for LocalizedReplayer: returns a scripted outcome, no browser/LLM."""
+
+    outcome_verdict = "pass"
+    outcome_repaired = True
+
+    def __init__(self, **kwargs):
+        self.run_id = kwargs["run_id"]
+
+    async def run(self):
+        from aiwebtest.replay.executor import HealOutcome
+
+        return HealOutcome(self.run_id, self.outcome_verdict, "in-process heal",
+                           self.outcome_repaired)
+
+
+async def test_auto_localized_repair_heals_before_the_agent(tmp_path, settings, monkeypatch):
+    # An errored replay is first healed in-process (Tier 1); the expensive agent re-run
+    # (Tier 2) is never reached, and the passing heal becomes the new recording.
+    _FakeReplayer.outcome_verdict = "pass"
+    monkeypatch.setattr("aiwebtest.replay.executor.LocalizedReplayer", _FakeReplayer)
+    manager = FakeManager(settings=settings)
+    manager.client_factory = lambda: object()  # enables the heal tier
+    _healable_recording(settings, "rec1")
+    store = _store(tmp_path)
+    test = store.add("t", "do it", source_run_id="rec1")
+
+    record = await SuiteRunner(manager, store).run_test(test.test_id, mode="auto")
+
+    assert (record.mode, record.verdict, record.healed) == ("heal", "pass", True)
+    assert manager.created == []  # the agent tier was NOT reached
+    history = [(r.mode, r.verdict) for r in store.get(test.test_id).history]
+    assert history == [("replay", "error"), ("heal", "pass")]
+    assert store.get(test.test_id).source_run_id == record.run_id  # heal is the recording
+
+
+async def test_auto_localized_repair_error_falls_back_to_agent(tmp_path, settings, monkeypatch):
+    # If the in-process heal itself errors (site changed structurally), escalate to the
+    # full agent re-run — the heal attempt is still recorded in the honest history.
+    _FakeReplayer.outcome_verdict = "error"
+    monkeypatch.setattr("aiwebtest.replay.executor.LocalizedReplayer", _FakeReplayer)
+    manager = FakeManager(settings=settings, agent_verdict="pass")
+    manager.client_factory = lambda: object()
+    _healable_recording(settings, "rec1")
+    store = _store(tmp_path)
+    test = store.add("t", "do it", source_run_id="rec1")
+
+    record = await SuiteRunner(manager, store).run_test(test.test_id, mode="auto")
+
+    assert (record.mode, record.verdict) == ("agent", "pass")
+    assert manager.created == [record.run_id]
+    history = [(r.mode, r.verdict) for r in store.get(test.test_id).history]
+    assert history == [("replay", "error"), ("heal", "error"), ("agent", "pass")]
+
+
+async def test_auto_localized_repair_can_be_disabled(tmp_path, settings, monkeypatch):
+    # With the flag off, an errored replay skips straight to the agent re-run (the prior
+    # behavior) — the in-process replayer must never even be constructed.
+    settings.agent.localized_repair = False
+    monkeypatch.setattr(
+        "aiwebtest.replay.executor.LocalizedReplayer",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("heal tier should be skipped")),
+    )
+    manager = FakeManager(settings=settings, agent_verdict="pass")
+    manager.client_factory = lambda: object()
+    _healable_recording(settings, "rec1")
+    store = _store(tmp_path)
+    test = store.add("t", "do it", source_run_id="rec1")
+
+    record = await SuiteRunner(manager, store).run_test(test.test_id, mode="auto")
+
+    assert record.mode == "agent"
+    history = [(r.mode, r.verdict) for r in store.get(test.test_id).history]
+    assert history == [("replay", "error"), ("agent", "pass")]
+
+
 async def test_auto_without_recording_runs_the_agent(tmp_path: Path, settings):
     manager = FakeManager(settings=settings)
     store = _store(tmp_path)

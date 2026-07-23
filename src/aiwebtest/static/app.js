@@ -223,7 +223,7 @@ function suiteItem(test) {
     b.addEventListener("click", () => fn(b));
     actions.appendChild(b);
   };
-  mkBtn("▶ auto", "Replay the recording; self-heal via the agent if it broke",
+  mkBtn("▶ auto", "Replay the recording; if it broke, heal the failing step in-place, then a full agent re-run if needed",
     (b) => runSuiteTest(test.test_id, "auto", b));
   mkBtn("🤖 agent", "Full agentic run (re-records on pass)",
     (b) => runSuiteTest(test.test_id, "agent", b));
