@@ -27,7 +27,12 @@
           </label>
           <button id="execute">Run Code</button>
         </div>
+        <label class="runner-toggle" title="On an error (a broken/renamed locator), re-point the failing step against the live site with the AI and re-record. Needs a script opened via a completed test's 'run code' link.">
+          <input id="autoheal" type="checkbox">
+          Auto-heal broken locators on error
+        </label>
         <div id="runner-status" class="status idle">idle</div>
+        <div id="heal-status" class="heal-status"></div>
         <div id="report-link"></div>
       </div>
 

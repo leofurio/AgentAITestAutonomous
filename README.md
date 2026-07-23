@@ -189,6 +189,17 @@ After a run completes, use the `download Playwright code` link to save the gener
 script, or open `run code` to load it into `/runner`. The runner executes pasted Python
 code locally, so use it only for scripts you trust.
 
+**Auto-heal in the runner.** Tick **Auto-heal broken locators on error** before running a
+script that was opened via a completed test's `run code` link. If the run errors on a
+broken/renamed locator, the runner calls `POST /api/playwright/heal` with that recording's
+run id: the same in-process localized repair re-points the failing step against the live
+site and re-records a corrected script, which you can load back into the editor with one
+click. It fires only on an *error*, never on an assertion *fail* (a real regression is
+reported, not healed), and only for scripts backed by a recording — hand-pasted code has
+no recorded step intent to repair. The endpoint is gated like the code runner
+(`code_runner_enabled`, local-only unless `code_runner_allow_remote`) and needs an agent
+client configured.
+
 ## Run tests (headless — CI / containers)
 
 ```bash

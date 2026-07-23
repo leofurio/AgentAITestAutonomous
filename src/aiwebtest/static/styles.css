@@ -28,6 +28,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .status.normalizing { color: var(--accent); }
 .status.done { color: var(--pass); }
 .status.error { color: var(--fail); }
+.status.healing { color: #8957e5; }
+.runner-toggle { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  font-size: 13px; color: var(--muted); cursor: pointer; }
+.runner-toggle input { width: auto; margin: 0; cursor: pointer; }
+.heal-status { margin-top: 8px; font-size: 13px; color: #8957e5; text-align: center;
+  min-height: 0; }
+.heal-status:empty { margin-top: 0; }
 .timeline-wrap { padding: 24px; overflow-y: auto; }
 .timeline { display: flex; flex-direction: column; gap: 10px; max-width: 820px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
