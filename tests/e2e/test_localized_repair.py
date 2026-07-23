@@ -182,6 +182,31 @@ async def test_localized_repair_does_not_mask_a_vanished_assertion_target(settin
     )["verdict"] == "fail"
 
 
+async def test_heal_endpoint_reruns_a_recording(settings, browser_page):
+    # The runner's auto-heal calls POST /api/playwright/heal with the recording's run id;
+    # the endpoint re-runs it in-process and returns the re-recorded artifacts. A clean
+    # recording heals to pass with no repair (the AI-repair path is covered above).
+    from httpx import ASGITransport, AsyncClient
+
+    from aiwebtest.web.app import create_app
+
+    report = await _make_recording(settings, browser_page, "rec_endpoint")
+    assert report.verdict == Verdict.PASS
+
+    app = create_app(settings=settings, client_factory=lambda: None)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/playwright/heal", json={"run_id": "rec_endpoint"})
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert (data["verdict"], data["repaired"]) == ("pass", False)
+    assert data["script_url"].endswith("/playwright_test.py")
+    assert data["report_url"].endswith("/report.html")
+    # The heal left a real, replayable recording on disk in its own run dir.
+    assert (settings.output_dir / data["heal_run_id"] / "report.json").exists()
+
+
 async def test_localized_repair_replays_a_valid_recording_without_repair(settings, browser_page):
     # When nothing is broken, the executor just replays in-process and passes, touching
     # no model at all (repaired stays False).
