@@ -97,9 +97,27 @@ Three run modes:
 - `replay` — execute the recorded script (fast, free, deterministic).
 - `agent` — full agentic run; a **passing** agent run becomes the new recording.
 - `auto` (default) — replay first; if the replay **errors** (stale locator, crash — the
-  *test* broke, not the app) it self-heals: the agent re-runs the saved instruction and
-  re-records the script. A replay that *fails its assertions* is reported as a genuine
-  fail — healing never masks a real regression.
+  *test* broke, not the app) it self-heals in two tiers. A replay that *fails its
+  assertions* is reported as a genuine fail — healing never masks a real regression.
+
+**Two-tier self-healing (on an `auto`-replay error).** A single renamed button should not
+cost a full agentic re-run, so healing starts *localized*:
+
+1. **Localized repair** (`agent.localized_repair`, default on) — the recording is re-run
+   **in-process**, and at the exact step whose locator no longer resolves, the agent is
+   shown the live page and picks the element the step meant (`get_by_role`/name/id
+   descriptors decide first; the model is asked only when they all miss). The rest of the
+   deterministic replay is kept. A successful heal writes a fresh recording with the
+   corrected locators, so the next replay is deterministic again — and it stays *off the
+   happy path*: it fires only on an error, only when an agent client is configured, so
+   plain `replay`/CI never call a model. A replay that *fails an assertion* is a
+   regression and is reported as such, never healed.
+2. **Full agent re-run** — only if the localized repair itself still **errors** (the site
+   changed structurally and a single step can't be re-pointed) does the agent re-run the
+   whole saved instruction and re-record the script.
+
+Every tier is appended to the test's history, so you can see whether a run passed, needed
+a localized heal, or needed a full re-record.
 
 In the UI, use **Save form as suite test** (the last completed live run is attached as
 the recording) and the per-test ▶ auto / 🤖 agent buttons, or **Run all (auto)** for a
