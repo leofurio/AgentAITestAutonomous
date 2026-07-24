@@ -223,9 +223,9 @@ function suiteItem(test) {
     b.addEventListener("click", () => fn(b));
     actions.appendChild(b);
   };
-  mkBtn("▶ auto", "Replay the recording; if it broke, heal the failing step in-place, then a full agent re-run if needed",
+  mkBtn("▶ Run", "Replay the recording without the AI; if it broke, heal the failing step in-place, then a full AI re-run only if needed",
     (b) => runSuiteTest(test.test_id, "auto", b));
-  mkBtn("🤖 agent", "Full agentic run (re-records on pass)",
+  mkBtn("🤖 Re-run with AI", "Full agent run that re-records the test when it passes",
     (b) => runSuiteTest(test.test_id, "agent", b));
   mkBtn("✕", "Delete this suite test", async () => {
     if (!confirm(`Delete suite test "${test.name}"?`)) return;
@@ -240,6 +240,14 @@ async function loadSuite() {
   try {
     const data = await api("GET", "/api/suite");
     suiteList.innerHTML = "";
+    if (!data.tests.length) {
+      const empty = document.createElement("p");
+      empty.className = "hint suite-empty";
+      empty.textContent =
+        "No saved tests yet — write a test above and click “Save current test to suite”.";
+      suiteList.appendChild(empty);
+      return;
+    }
     for (const test of data.tests) suiteList.appendChild(suiteItem(test));
   } catch (e) {
     // Suite UI is secondary: never block the main flow on it.
@@ -295,16 +303,20 @@ saveSuiteBtn.addEventListener("click", async () => {
 
 runSuiteBtn.addEventListener("click", async () => {
   runSuiteBtn.disabled = true;
-  runSuiteBtn.textContent = "Running suite…";
+  runSuiteBtn.textContent = "Running…";
   try {
     const res = await api("POST", "/api/suite/run_all", { mode: "auto" });
-    setStatus(res.passed === res.total ? "done" : "error");
-    alert(`Suite: ${res.passed}/${res.total} passed`);
+    if (!res.total) {
+      alert("No saved tests yet — save one first with “Save current test to suite”.");
+    } else {
+      setStatus(res.passed === res.total ? "done" : "error");
+      alert(`Suite: ${res.passed} of ${res.total} passed`);
+    }
   } catch (e) {
     alert("Suite run failed: " + e.message);
   } finally {
     runSuiteBtn.disabled = false;
-    runSuiteBtn.textContent = "Run all (auto)";
+    runSuiteBtn.textContent = "Run all saved tests";
     loadSuite();
   }
 });
