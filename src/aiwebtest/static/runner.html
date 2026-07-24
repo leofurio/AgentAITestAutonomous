@@ -11,13 +11,20 @@
     <header class="runner-header">
       <div>
         <h1>Playwright runner</h1>
-        <p class="hint">Paste a Python Playwright script and run it locally.</p>
+        <p class="hint">Paste, upload, or drop a Python Playwright script and run it locally.</p>
       </div>
       <a class="side-link" href="/">Back to tests</a>
     </header>
 
     <section class="runner-grid">
       <div class="runner-editor">
+        <div class="editor-toolbar">
+          <label class="upload-btn">
+            Upload .py
+            <input id="upload" type="file" accept=".py,text/x-python">
+          </label>
+          <span id="upload-name" class="upload-name"></span>
+        </div>
         <label>Code
           <textarea id="code" class="code-area" spellcheck="false"></textarea>
         </label>

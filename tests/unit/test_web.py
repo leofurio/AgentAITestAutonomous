@@ -39,6 +39,16 @@ def test_runner_served(settings):
     assert "Playwright runner" in resp.text
 
 
+def test_runner_has_upload_control(settings):
+    # The runner must expose a .py file upload that loads a script into the editor.
+    with _client(settings) as client:
+        resp = client.get("/runner")
+    assert resp.status_code == 200
+    assert 'id="upload"' in resp.text
+    assert 'type="file"' in resp.text
+    assert 'accept=".py' in resp.text
+
+
 def test_execute_playwright_code_runs_python(settings):
     with _client(settings) as client:
         resp = client.post("/api/playwright/execute", json={"code": "print('hello')"})

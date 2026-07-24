@@ -3,6 +3,8 @@
 const codeEl = document.getElementById("code");
 const timeoutEl = document.getElementById("timeout");
 const executeBtn = document.getElementById("execute");
+const uploadEl = document.getElementById("upload");
+const uploadNameEl = document.getElementById("upload-name");
 const autohealEl = document.getElementById("autoheal");
 const statusEl = document.getElementById("runner-status");
 const healStatusEl = document.getElementById("heal-status");
@@ -194,6 +196,53 @@ function showHealResult(data) {
     reportLinkEl.appendChild(link);
   }
 }
+
+function loadFile(file) {
+  if (!file) return;
+  if (!/\.py$/i.test(file.name)) {
+    setStatus("error");
+    stderrEl.textContent = "Please choose a .py file.";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    codeEl.value = typeof reader.result === "string" ? reader.result : "";
+    uploadNameEl.textContent = file.name;
+    // An uploaded script has no server-side recording behind it, so drop any ?script=
+    // source: auto-heal must not tie the uploaded code to a previous run's recording.
+    if (new URLSearchParams(location.search).has("script")) {
+      history.replaceState(null, "", "/runner");
+    }
+    stdoutEl.textContent = "";
+    stderrEl.textContent = "";
+    reportLinkEl.innerHTML = "";
+    setHeal("");
+    setStatus("idle");
+  };
+  reader.onerror = () => {
+    setStatus("error");
+    stderrEl.textContent = "Could not read the file.";
+  };
+  reader.readAsText(file);
+}
+
+uploadEl.addEventListener("change", () => {
+  loadFile(uploadEl.files && uploadEl.files[0]);
+  uploadEl.value = "";  // reset so re-selecting the same filename fires 'change' again
+});
+
+// Drag-and-drop a .py file straight onto the editor.
+codeEl.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  codeEl.classList.add("dragover");
+});
+codeEl.addEventListener("dragleave", () => codeEl.classList.remove("dragover"));
+codeEl.addEventListener("drop", (event) => {
+  event.preventDefault();
+  codeEl.classList.remove("dragover");
+  const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
 
 executeBtn.addEventListener("click", executeCode);
 loadScriptFromQuery();
