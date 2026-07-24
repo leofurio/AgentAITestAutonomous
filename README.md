@@ -186,8 +186,10 @@ On Windows, prefer the `aiwebtest` entrypoint instead of `uvicorn --reload`: Pla
 async driver needs an event loop that supports subprocesses.
 
 After a run completes, use the `download Playwright code` link to save the generated
-script, or open `run code` to load it into `/runner`. The runner executes pasted Python
-code locally, so use it only for scripts you trust.
+script, or open `run code` to load it into `/runner`. In the runner you can also **upload
+a `.py` file** (the *Upload .py* button) or drag-and-drop one onto the editor to load it as
+the script to run. The runner executes the code locally, so use it only for scripts you
+trust.
 
 **Auto-heal in the runner.** Tick **Auto-heal broken locators on error** before running a
 script that was opened via a completed test's `run code` link. If the run errors on a
