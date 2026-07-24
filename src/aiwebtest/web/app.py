@@ -99,6 +99,18 @@ def create_app(
     app.include_router(api_router)
     app.include_router(ws_router)
 
+    @app.middleware("http")
+    async def _revalidate_frontend(request, call_next):
+        # The UI (HTML + bundled JS/CSS) ships with the app and changes on every update.
+        # Force revalidation so a browser never runs a stale runner.js/app.js against a
+        # newer server — otherwise features (e.g. the runner's upload) silently do nothing
+        # until a hard refresh. "no-cache" still allows 304s, so it stays cheap.
+        response = await call_next(request)
+        path = request.url.path
+        if path in ("/", "/runner") or path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(_STATIC_DIR / "index.html")
