@@ -82,7 +82,7 @@ async function showReportLink(workDir) {
 async function executeCode() {
   const code = codeEl.value.trim();
   if (!code) {
-    alert("Paste Python Playwright code first.");
+    alert("Paste, upload, or drop a Python Playwright script first.");
     return;
   }
 

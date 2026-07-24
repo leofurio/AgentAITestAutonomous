@@ -26,10 +26,14 @@
       <div id="status" class="status idle">idle</div>
 
       <section class="suite">
-        <h2>Suite</h2>
-        <p class="hint">Saved tests replay without the AI; broken recordings self-heal.</p>
-        <button id="save-suite" class="secondary">Save form as suite test</button>
-        <button id="run-suite" class="secondary">Run all (auto)</button>
+        <h2>Suite — saved tests</h2>
+        <p class="hint">Save a test you wrote above to re-run it later without the AI —
+          instant and free. If the page changes and a saved test breaks, it repairs
+          itself.</p>
+        <button id="save-suite" class="secondary"
+          title="Save the Target URL + Instruction + Test data above as a reusable test. Your last completed run becomes its recording.">Save current test to suite</button>
+        <button id="run-suite" class="secondary"
+          title="Replay every saved test. A broken recording self-heals first, and only falls back to a full AI run if that can't fix it.">Run all saved tests</button>
         <div id="suite-list" class="suite-list"></div>
       </section>
     </aside>
