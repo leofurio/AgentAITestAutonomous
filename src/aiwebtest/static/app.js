@@ -227,13 +227,89 @@ function suiteItem(test) {
     (b) => runSuiteTest(test.test_id, "auto", b));
   mkBtn("🤖 Re-run with AI", "Full agent run that re-records the test when it passes",
     (b) => runSuiteTest(test.test_id, "agent", b));
+  mkBtn("✏️", "Rename this test", async () => {
+    const name = prompt("New name for this test:", test.name);
+    if (name === null) return;            // cancelled
+    if (!name.trim()) {
+      alert("The name must not be empty.");
+      return;
+    }
+    try {
+      await api("PATCH", `/api/suite/${test.test_id}`, { name: name.trim() });
+      loadSuite();
+    } catch (e) {
+      alert("Rename failed: " + e.message);
+    }
+  });
   mkBtn("✕", "Delete this suite test", async () => {
     if (!confirm(`Delete suite test "${test.name}"?`)) return;
     await api("DELETE", `/api/suite/${test.test_id}`);
     loadSuite();
   });
   item.appendChild(actions);
+
+  if (test.history.length) item.appendChild(historyBlock(test.history));
   return item;
+}
+
+// What each run mode means, in the user's terms: the history is where you check what a
+// saved test actually did — especially the AI-free replays.
+const MODE_LABEL = {
+  replay: "replayed without AI",
+  heal: "self-healed (AI fixed one step)",
+  agent: "full AI run",
+};
+
+function historyBlock(history) {
+  const details = document.createElement("details");
+  details.className = "run-log";
+  const summary = document.createElement("summary");
+  summary.textContent = `Run log (${history.length})`;
+  details.appendChild(summary);
+
+  // Newest first: the last run is what you almost always want to inspect.
+  for (const record of [...history].reverse()) {
+    const row = document.createElement("div");
+    row.className = "run-entry";
+
+    const head = document.createElement("div");
+    head.className = "row";
+    head.appendChild(badge(record.verdict, record.verdict));
+    const what = document.createElement("span");
+    what.className = "run-mode";
+    what.textContent = MODE_LABEL[record.mode] || record.mode;
+    head.appendChild(what);
+    row.appendChild(head);
+
+    const when = document.createElement("div");
+    when.className = "meta";
+    when.textContent = new Date(record.finished_at).toLocaleString();
+    row.appendChild(when);
+
+    if (record.summary) {
+      const text = document.createElement("div");
+      text.className = "run-summary";
+      text.textContent = record.summary;
+      row.appendChild(text);
+    }
+
+    const links = document.createElement("div");
+    links.className = "run-links";
+    if (record.log_url) links.appendChild(link(record.log_url, "steps log"));
+    if (record.report_url) links.appendChild(link(record.report_url, "report"));
+    if (links.children.length) row.appendChild(links);
+
+    details.appendChild(row);
+  }
+  return details;
+}
+
+function link(href, text) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.target = "_blank";
+  a.textContent = text;
+  return a;
 }
 
 async function loadSuite() {

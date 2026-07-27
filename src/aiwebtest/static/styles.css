@@ -87,6 +87,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 500; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); }
 .suite-item .actions button:hover:not(:disabled) { border-color: var(--accent); }
+.run-log { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; }
+.run-log summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.run-log summary:hover { color: var(--accent); }
+.run-entry { margin-top: 8px; padding-left: 8px; border-left: 2px solid var(--border); }
+.run-entry .row { justify-content: flex-start; }
+.run-mode { color: var(--text); font-size: 12px; }
+.run-summary { color: var(--muted); font-size: 12px; margin-top: 2px;
+  word-break: break-word; }
+.run-links { display: flex; gap: 10px; margin-top: 3px; }
+.run-links a { color: var(--accent); font-size: 12px; text-decoration: none; }
+.run-links a:hover { text-decoration: underline; }
 .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
   font-weight: 700; text-transform: uppercase; }
 .badge.pass { background: rgba(63,185,80,0.15); color: var(--pass); }

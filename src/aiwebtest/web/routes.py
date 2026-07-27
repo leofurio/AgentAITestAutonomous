@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..replay import REPLAY_LOG_NAME
+
 router = APIRouter(prefix="/api")
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -45,6 +47,10 @@ class SuiteSaveRequest(BaseModel):
 
 class SuiteRunModeRequest(BaseModel):
     mode: str = "auto"  # auto | replay | agent
+
+
+class SuiteRenameRequest(BaseModel):
+    name: str
 
 
 class CodeRunResponse(BaseModel):
@@ -104,6 +110,15 @@ async def get_report_html(run_id: str, request: Request) -> FileResponse:
     return FileResponse(_artifact(request, run_id, "report.html"), media_type="text/html")
 
 
+@router.get("/runs/{run_id}/" + REPLAY_LOG_NAME)
+async def get_replay_log(run_id: str, request: Request) -> FileResponse:
+    # The step-by-step narration of a model-free run: what it clicked, typed, asserted,
+    # and (for a heal) which locator it had to re-point.
+    return FileResponse(
+        _artifact(request, run_id, REPLAY_LOG_NAME), media_type="text/plain"
+    )
+
+
 @router.get("/runs/{run_id}/playwright_test.py")
 async def get_playwright_script(run_id: str, request: Request) -> FileResponse:
     return FileResponse(
@@ -121,10 +136,44 @@ async def get_screenshot(run_id: str, filename: str, request: Request) -> FileRe
 # --- Suite: saved tests, history, replay / self-healing re-runs -------------------
 
 
+def _with_artifact_urls(test: dict, output_dir: Path) -> dict:
+    """Annotate each history entry with the artifacts that actually exist on disk.
+
+    Computed server-side (rather than stored on the record) so the links can never go
+    stale when a run directory is pruned, and the UI needs no extra probing requests.
+    """
+    for record in test.get("history", []):
+        run_id = record.get("run_id") or ""
+        if not _RUN_ID_RE.fullmatch(run_id):
+            continue
+        run_dir = output_dir / run_id
+        if (run_dir / REPLAY_LOG_NAME).exists():
+            record["log_url"] = f"/api/runs/{run_id}/{REPLAY_LOG_NAME}"
+        if (run_dir / "report.html").exists():
+            record["report_url"] = f"/api/runs/{run_id}/report.html"
+    return test
+
+
 @router.get("/suite")
 async def list_suite(request: Request) -> dict:
     store = request.app.state.suite_store
-    return {"tests": [t.model_dump(mode="json") for t in store.list()]}
+    output_dir = request.app.state.settings.output_dir
+    return {
+        "tests": [
+            _with_artifact_urls(t.model_dump(mode="json"), output_dir) for t in store.list()
+        ]
+    }
+
+
+@router.patch("/suite/{test_id}")
+async def rename_suite_test(test_id: str, req: SuiteRenameRequest, request: Request) -> dict:
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    test = request.app.state.suite_store.rename(test_id, name)
+    if test is None:
+        raise HTTPException(status_code=404, detail="suite test not found")
+    return test.model_dump(mode="json")
 
 
 @router.post("/suite")

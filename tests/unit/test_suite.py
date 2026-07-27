@@ -125,6 +125,20 @@ def test_store_records_history_and_promotes_passing_agent_runs(tmp_path: Path):
     assert [r.run_id for r in store.get(test.test_id).history] == ["r1", "a1", "a2"]
 
 
+def test_store_renames_a_test(tmp_path: Path):
+    store = _store(tmp_path)
+    test = store.add("old name", "do it", source_run_id="rec1")
+
+    renamed = store.rename(test.test_id, "new name")
+
+    assert renamed.name == "new name"
+    # Renaming touches nothing else: the recording and history stay put, and the new
+    # name survives a reload (it is persisted, not just held in memory).
+    assert renamed.source_run_id == "rec1"
+    assert _store(tmp_path).get(test.test_id).name == "new name"
+    assert store.rename("nope", "x") is None
+
+
 def test_store_survives_a_corrupt_file(tmp_path: Path):
     (tmp_path / "suite.json").write_text("{not json", encoding="utf-8")
     assert _store(tmp_path).list() == []  # degraded, not crashed
@@ -339,6 +353,55 @@ def test_suite_save_validation(settings):
             json={"name": "x", "instruction": "y", "source_run_id": "../evil"},
         )
         assert resp.status_code == 422
+
+
+def test_suite_rename_over_http(settings):
+    with _client(settings) as client:
+        test_id = client.post(
+            "/api/suite", json={"name": "old", "instruction": "log in"}
+        ).json()["test_id"]
+
+        resp = client.patch(f"/api/suite/{test_id}", json={"name": "  login flow  "})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "login flow"          # trimmed
+        assert client.get("/api/suite").json()["tests"][0]["name"] == "login flow"
+
+        blank = client.patch(f"/api/suite/{test_id}", json={"name": "   "})
+        assert blank.status_code == 422
+        missing = client.patch("/api/suite/nope", json={"name": "x"})
+        assert missing.status_code == 404
+
+
+def test_suite_history_links_to_the_step_log(settings):
+    # The run log is what tells the user what an AI-free run actually did, so the
+    # listing must point at it (and at the report) whenever the files exist.
+    from aiwebtest.replay import REPLAY_LOG_NAME
+
+    with _client(settings) as client:
+        run_dir = settings.output_dir / "recLog"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "playwright_test.py").write_text(_PASSING_REPLAY, encoding="utf-8")
+
+        test_id = client.post(
+            "/api/suite",
+            json={"name": "t", "instruction": "do", "source_run_id": "recLog"},
+        ).json()["test_id"]
+        record = client.post(f"/api/suite/{test_id}/run", json={"mode": "replay"}).json()
+
+        entry = client.get("/api/suite").json()["tests"][0]["history"][-1]
+        assert entry["log_url"] == f"/api/runs/{record['run_id']}/{REPLAY_LOG_NAME}"
+
+        # The log is served, and carries the replay's own step narration.
+        log = client.get(entry["log_url"])
+        assert log.status_code == 200
+        assert "REPLAY RESULT: PASS" in log.text
+
+
+def test_replay_log_404s_when_absent(settings):
+    from aiwebtest.replay import REPLAY_LOG_NAME
+
+    with _client(settings) as client:
+        assert client.get(f"/api/runs/nosuchrun/{REPLAY_LOG_NAME}").status_code == 404
 
 
 def test_suite_run_replay_over_http(settings):

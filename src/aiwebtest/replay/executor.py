@@ -23,6 +23,7 @@ from pathlib import Path
 from ..agent.schemas import StepKind, TestReport, Verdict
 from ..config import BrowserConfig
 from ..logging_config import get_logger
+from . import REPLAY_LOG_NAME
 from .matcher import match_ref
 
 logger = get_logger("replay.executor")
@@ -81,6 +82,10 @@ class LocalizedReplayer:
         failure: str | None = None
         repaired = False
         steps_done = 0
+        # Narrates every step (and every repair) so an AI-free run leaves the same
+        # human-readable trail as the generated replay script's stdout.
+        log: list[str] = [f"Localized repair of {self.report.instruction!r}", ""]
+        total = len(replayable)
 
         try:
             async with BrowserSession(self.browser, self.output_dir / "screenshots") as session:
@@ -90,10 +95,11 @@ class LocalizedReplayer:
                     allowed_domains=[],  # replaying a trusted recording: don't re-gate hosts
                     include_screenshots=self.include_screenshots,
                 )
-                for step in replayable:
+                for step_no, step in enumerate(replayable, start=1):
                     tool = step.tool_name
                     args = dict(step.tool_input or {})
                     is_assert = tool == "assert_that"
+                    log.append(f"step {step_no}/{total}: {tool}")
 
                     # A recorded tool_input carrying a ref targets an element: re-resolve it
                     # against the live page (its ordinal ref is meaningless now) and heal it
@@ -107,14 +113,19 @@ class LocalizedReplayer:
                         # false pass. An assertion whose target is gone soft-fails instead,
                         # exactly as the deterministic replay does — never a hard error.
                         if ref is None and not is_assert and self.repair is not None:
+                            log.append("  ! recorded locator no longer matches — "
+                                       "asking the AI to re-point it")
                             ref = await self.repair(step, outline, elements)
                             if ref is not None:
                                 repaired = True
+                                log.append(f"  ✓ repaired: now targeting {ref}")
                                 logger.info("repaired step %r -> live ref %s", tool, ref)
                         if ref is None:
                             if is_assert:
+                                log.append("  ✗ assertion target not found — recorded as FAIL")
                                 self._record_failed_assertion(builder, args)
                                 continue
+                            log.append("  ✗ could not resolve the element — stopping")
                             builder.add_tool_call(tool, args)
                             builder.add_tool_result(
                                 tool, f"Could not resolve target for {tool}",
@@ -138,6 +149,7 @@ class LocalizedReplayer:
                     )
                     if outcome.assertion is not None:
                         builder.add_assertion(outcome.assertion)
+                    log.append(f"  {'✗' if outcome.is_error else '→'} {outcome.summary}")
                     steps_done += 1
                     if outcome.is_error:
                         failure = outcome.summary
@@ -146,6 +158,7 @@ class LocalizedReplayer:
                         break
         except Exception as exc:  # noqa: BLE001 - a heal crash must degrade, not propagate
             failure = f"{type(exc).__name__}: {exc}"
+            log.append(f"  ✗ {failure}")
             logger.warning("localized repair aborted: %s", failure)
 
         summary = self._summary(failure, repaired, steps_done)
@@ -156,8 +169,20 @@ class LocalizedReplayer:
             builder.report.verdict = Verdict.ERROR
         builder.persist()
         verdict = builder.report.verdict.value
+        log += ["", f"RESULT: {verdict.upper()} - {builder.report.summary}"]
+        self._write_log(log)
         logger.info("localized repair %s -> %s (repaired=%s)", self.run_id, verdict, repaired)
         return HealOutcome(self.run_id, verdict, builder.report.summary, repaired)
+
+    def _write_log(self, lines: list[str]) -> None:
+        """Persist the step narration; a logging failure must never fail the run."""
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            (self.output_dir / REPLAY_LOG_NAME).write_text(
+                "\n".join(lines) + "\n", encoding="utf-8"
+            )
+        except Exception as exc:  # noqa: BLE001 - the log is diagnostics, not the result
+            logger.warning("could not write the heal log in %s: %s", self.output_dir, exc)
 
     @staticmethod
     def _record_failed_assertion(builder, args: dict) -> None:

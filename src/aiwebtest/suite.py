@@ -33,6 +33,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .logging_config import get_logger
+from .replay import REPLAY_LOG_NAME
 
 logger = get_logger("suite")
 
@@ -40,6 +41,17 @@ RUN_MODES = ("auto", "replay", "agent")
 
 # History is a diagnostic trail, not a database: keep the most recent entries only.
 _HISTORY_LIMIT = 50
+
+
+def _write_log(work_dir: Path, output: bytes, note: str = "") -> None:
+    """Persist a run's step log; never let a logging failure break the run."""
+    try:
+        text = output.decode("utf-8", errors="replace")
+        if note:
+            text = f"{text}\n{note}\n"
+        (work_dir / REPLAY_LOG_NAME).write_text(text, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - the log is diagnostics, not the result
+        logger.warning("could not write %s in %s: %s", REPLAY_LOG_NAME, work_dir, exc)
 
 
 class RunRecord(BaseModel):
@@ -128,6 +140,15 @@ class SuiteStore:
         del self._tests[test_id]
         self._save()
         return True
+
+    def rename(self, test_id: str, name: str) -> SuiteTest | None:
+        """Give a saved test a new display name; returns None when it is unknown."""
+        test = self._tests.get(test_id)
+        if test is None:
+            return None
+        test.name = name
+        self._save()
+        return test
 
     def record_run(self, test_id: str, record: RunRecord) -> None:
         test = self._tests[test_id]
@@ -276,15 +297,20 @@ class SuiteRunner:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self.replay_timeout)
         except TimeoutError:
             proc.kill()
-            await proc.communicate()
+            stdout, _ = await proc.communicate()
+            # Persist whatever the run managed to print: on a timeout the step log is
+            # the only evidence of how far it got.
+            _write_log(work_dir, stdout, f"--- timed out after {self.replay_timeout}s ---")
             return RunRecord(
                 run_id=run_id, mode="replay", verdict="error",
                 summary=f"Replay timed out after {self.replay_timeout}s",
             )
 
-        verdict, summary = self._replay_outcome(
-            work_dir, proc.returncode, stdout.decode("utf-8", errors="replace")
-        )
+        text = stdout.decode("utf-8", errors="replace")
+        # The script narrates every step it executes ("step 3/7: click", "PASS: ..."),
+        # which is the human-readable record of what an AI-free run actually did.
+        _write_log(work_dir, stdout)
+        verdict, summary = self._replay_outcome(work_dir, proc.returncode, text)
         return RunRecord(run_id=run_id, mode="replay", verdict=verdict, summary=summary)
 
     @staticmethod
