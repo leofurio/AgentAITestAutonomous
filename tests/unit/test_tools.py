@@ -53,7 +53,9 @@ async def test_login_flow_and_assertion(browser_page, tmp_path):
         "assert_that",
         {"description": "welcome shown", "condition": "text_contains", "expected": "Welcome, demo"},
     )
-    assert out.assertion is not None
+    # dispatch() turns any exception into an error outcome with no assertion, so surface
+    # its summary here: otherwise a failure reads as an opaque AttributeError on None.
+    assert out.assertion is not None, out.summary
     assert out.assertion.passed is True
 
 
@@ -64,6 +66,7 @@ async def test_failed_assertion_records_fail(browser_page, tmp_path):
         "assert_that",
         {"description": "nope", "condition": "text_contains", "expected": "NotOnThisPage"},
     )
+    assert out.assertion is not None, out.summary
     assert out.assertion.passed is False
 
 
