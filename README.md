@@ -119,6 +119,14 @@ cost a full agentic re-run, so healing starts *localized*:
 Every tier is appended to the test's history, so you can see whether a run passed, needed
 a localized heal, or needed a full re-record.
 
+**Run log.** Every model-free run writes a `replay.log` next to its report: the
+step-by-step narration of what it actually did (`step 3/7: click`, `PASS: ...`, and for a
+heal, which locator had to be re-pointed). In the UI each saved test has an expandable
+**Run log** listing every run with its verdict, what it was (*replayed without AI*,
+*self-healed*, *full AI run*), and links to its steps log and report — so an AI-free run
+is auditable rather than a black box. Saved tests can also be renamed with the ✏️ button
+(`PATCH /api/suite/<test_id>` with `{"name": "..."}`).
+
 In the UI, use **Save form as suite test** (the last completed live run is attached as
 the recording) and the per-test ▶ auto / 🤖 agent buttons, or **Run all (auto)** for a
 batch regression pass. The same operations are available over HTTP:

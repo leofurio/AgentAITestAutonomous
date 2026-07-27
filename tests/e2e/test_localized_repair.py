@@ -18,6 +18,7 @@ from aiwebtest.agent.events import EventBus
 from aiwebtest.agent.loop import AgentLoop
 from aiwebtest.agent.schemas import StepKind, Verdict
 from aiwebtest.browser.snapshot import take_snapshot
+from aiwebtest.replay import REPLAY_LOG_NAME
 from aiwebtest.replay.executor import LocalizedReplayer
 from tests.conftest import LOGIN_URL, FakeAnthropicClient, tool_turn
 
@@ -127,6 +128,14 @@ async def test_localized_repair_heals_a_stale_locator(settings, browser_page):
     script = (heal_dir / "playwright_test.py").read_text()
     assert "'id': 'login-btn'" in script
     assert "gone-btn" not in script
+
+    # The heal leaves a human-readable trail of what it did — including which step
+    # had to be re-pointed, so a self-healed run is auditable rather than magic.
+    log = (heal_dir / REPLAY_LOG_NAME).read_text()
+    assert "step 1/7: navigate" in log
+    assert "recorded locator no longer matches" in log
+    assert "✓ repaired: now targeting" in log
+    assert "RESULT: PASS" in log
 
 
 async def test_without_repair_a_stale_locator_errors(settings, browser_page):
