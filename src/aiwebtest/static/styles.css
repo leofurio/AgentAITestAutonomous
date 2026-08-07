@@ -130,6 +130,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .log-line.pass { color: var(--pass); }
 .log-line.fail { color: var(--fail); }
 .log-line.warn { color: var(--warn); }
+.log-line.normalized { color: var(--text); white-space: pre-wrap;
+  border-left: 2px solid #2da44e; padding-left: 6px; }
 .compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .compare-table th, .compare-table td { text-align: left; padding: 6px 8px;
   border-bottom: 1px solid var(--border); }

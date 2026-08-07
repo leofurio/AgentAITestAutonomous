@@ -65,20 +65,22 @@ async def test_comparison_runs_every_model_on_the_same_instruction(settings):
 
 
 @pytest.mark.asyncio
-async def test_comparison_normalizes_once_for_every_model(settings):
-    # Fairness rule: the pre-pass runs once and every model is handed the identical
-    # spec. Re-normalizing per model would change the input between contenders.
-    canonical = "GOAL: log in\nSTEPS:\n1. open the login page"
-    normalizer_calls = []
+async def test_each_model_normalizes_with_itself(settings):
+    # A comparison measures the whole pipeline per model, not just the browser-driving
+    # step: each contender runs its own normalizer pass on its own model and drives the
+    # browser with its own spec. `normalizer_model` is empty by default — "reuse the
+    # run's model" — so this is exactly what an ordinary run on that model does.
+    normalized_by = []
 
-    def normalizer_factory():
-        normalizer_calls.append(1)
-        return FakeAnthropicClient([text_turn(canonical)])
+    def normalizer_for(n_settings):
+        normalized_by.append(n_settings.model)
+        spec = f"GOAL: log in\nSTEPS:\n1. open the login page as {n_settings.model}"
+        return FakeAnthropicClient([text_turn(spec)])
 
     runner, _ = _runner(
         settings,
         client_factory=lambda: FakeAnthropicClient(_finishing_turns()),
-        normalizer_factory=normalizer_factory,
+        normalizer_factory_for=normalizer_for,
     )
 
     comparison = await runner.start(
@@ -86,25 +88,33 @@ async def test_comparison_normalizes_once_for_every_model(settings):
         [ModelSpec(model="model-a"), ModelSpec(model="model-b"),
          ModelSpec(model="model-c")],
     )
-    await runner.run_to_completion(comparison)
+    results = await runner.run_to_completion(comparison)
 
-    assert len(normalizer_calls) == 1                     # one pass, not one per model
-    assert comparison.normalized_instruction == canonical
-    assert comparison.normalizer_usage.calls == 1
+    # One pass per contender, each carried out by that contender's own model.
+    assert sorted(normalized_by) == ["model-a", "model-b", "model-c"]
 
-    for entry in comparison.runs:
+    for entry, result in zip(comparison.runs, results["results"], strict=True):
         report = json.loads(
             (settings.output_dir / entry.run_id / "report.json").read_text()
         )
-        assert report["normalized_instruction"] == canonical
-        assert report["instruction"] == "log in pls"      # original preserved
-        # The shared pre-pass is billed to the comparison, never to a contender.
-        assert [m["role"] for m in report["models"]] == ["agent"]
+        assert report["instruction"] == "log in pls"          # original preserved
+        assert report["normalized_instruction"].endswith(entry.model)
+        # The spec a model produced is surfaced in the results: how each one read the
+        # request is part of what the comparison shows.
+        assert result["normalized_instruction"] == report["normalized_instruction"]
+
+        roles = {m["role"]: m for m in report["models"]}
+        assert set(roles) == {"agent", "normalizer"}
+        assert roles["normalizer"]["model"] == entry.model
+        # Both roles are billed to the contender — its normalizer call is part of what
+        # choosing this model costs.
+        assert result["calls"] == roles["agent"]["calls"] + roles["normalizer"]["calls"]
 
 
 @pytest.mark.asyncio
 async def test_comparison_survives_a_normalizer_failure(settings):
-    # The pre-pass is best-effort: every model still runs, all on the raw instruction.
+    # The pass is best-effort per run: a contender whose normalizer fails still runs,
+    # on the raw instruction, and the others are unaffected.
     def exploding_normalizer():
         raise RuntimeError("no normalizer key")
 
@@ -120,8 +130,8 @@ async def test_comparison_survives_a_normalizer_failure(settings):
     )
     results = await runner.run_to_completion(comparison)
 
-    assert comparison.normalized_instruction is None
     assert [r["verdict"] for r in results["results"]] == ["pass", "pass"]
+    assert all(r["normalized_instruction"] is None for r in results["results"])
 
 
 @pytest.mark.asyncio

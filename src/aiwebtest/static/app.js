@@ -504,6 +504,10 @@ function handleCompareEvent(col, evt) {
   } else if (type === "assertion") {
     logLine(col, data.passed ? "pass" : "fail",
       (data.passed ? "✓ " : "✗ ") + data.description);
+  } else if (type === "normalized") {
+    // Each contender normalizes with its own model, so the specs differ — how a model
+    // read the request is part of what is being compared.
+    logLine(col, "normalized", data.text);
   } else if (type === "warning") {
     logLine(col, "warn", "⚠ " + data.message);
   } else if (type === "report") {
@@ -570,17 +574,29 @@ function renderCompareSummary(payload, container) {
 
   const title = document.createElement("h2");
   title.textContent = "Results";
-  container.append(title, table);
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent =
+    "Token counts cover the whole pipeline for each model — its own normalizer pass " +
+    "included, since that is part of what choosing this model costs.";
+  container.append(title, note, table);
 
-  const usage = payload.normalizer_usage;
-  if (usage && usage.calls) {
-    const note = document.createElement("p");
-    note.className = "hint";
-    note.textContent =
-      `Shared normalizer (${usage.provider}/${usage.model}): ${usage.calls} call, ` +
-      `${num(usage.input_tokens)} in / ${num(usage.output_tokens)} out — billed once ` +
-      "to the comparison, not to any single model.";
-    container.appendChild(note);
+  const specs = payload.results.filter((r) => r.normalized_instruction);
+  if (specs.length) {
+    const heading = document.createElement("h2");
+    heading.textContent = "How each model read the request";
+    const grid = document.createElement("div");
+    grid.className = "compare-grid";
+    for (const r of specs) {
+      const card = document.createElement("div");
+      card.className = "card normalized";
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = r.model;
+      card.append(label, textNode(r.normalized_instruction, true));
+      grid.appendChild(card);
+    }
+    container.append(heading, grid);
   }
 }
 
@@ -623,16 +639,6 @@ async function startComparison() {
   }
 
   setStatus("running");
-  if (comparison.normalized_instruction) {
-    const card = document.createElement("div");
-    card.className = "card normalized";
-    const label = document.createElement("div");
-    label.className = "label";
-    label.textContent = "shared instruction — every model is driven with this exact spec";
-    card.append(label, textNode(comparison.normalized_instruction, true));
-    compareEl.appendChild(card);
-  }
-
   const grid = document.createElement("div");
   grid.className = "compare-grid";
   const summary = document.createElement("div");

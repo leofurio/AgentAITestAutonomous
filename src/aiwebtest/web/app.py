@@ -83,16 +83,22 @@ def create_app(
     client_factory: Callable[[], Any] | None = None,
     normalizer_factory: Callable[[], Any] | None = None,
     client_factory_for: Callable[[Settings], Any] | None = None,
+    normalizer_factory_for: Callable[[Settings], Any] | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level)
     n_settings = normalizer_settings(settings)
-    # A model comparison runs each contender on derived settings, so it needs a factory
-    # that takes them. A caller supplying its own client_factory (tests, custom wiring)
-    # gets that client for every model unless it says otherwise.
+    # A model comparison runs each contender on derived settings — for the agent and for
+    # its own normalizer pass — so both need factories that take those settings. A caller
+    # supplying its own factory (tests, custom wiring) gets that client for every model
+    # unless it says otherwise.
     if client_factory_for is None:
         client_factory_for = (
             (lambda _settings: client_factory()) if client_factory else build_client
+        )
+    if normalizer_factory_for is None:
+        normalizer_factory_for = (
+            (lambda _settings: normalizer_factory()) if normalizer_factory else build_client
         )
     app = FastAPI(title="aiwebtest", version="0.1.0")
     app.state.settings = settings
@@ -102,6 +108,7 @@ def create_app(
         normalizer_factory=normalizer_factory or (lambda: build_client(n_settings)),
         normalizer_settings=n_settings,
         client_factory_for=client_factory_for,
+        normalizer_factory_for=normalizer_factory_for,
     )
     app.state.suite_store = SuiteStore(settings.output_dir / "suite.json")
     app.state.suite_runner = SuiteRunner(app.state.manager, app.state.suite_store)
