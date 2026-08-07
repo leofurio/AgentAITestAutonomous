@@ -8,6 +8,10 @@ const runBtn = $("run");
 const suiteList = $("suite-list");
 const saveSuiteBtn = $("save-suite");
 const runSuiteBtn = $("run-suite");
+const compareEl = $("compare");
+const compareModelsEl = $("compare-models");
+const addModelBtn = $("add-model");
+const runCompareBtn = $("run-compare");
 
 // The last completed live run: saving a suite test attaches it as the recording.
 let lastRunId = null;
@@ -104,21 +108,26 @@ function showVerdict(data) {
   verdictEl.classList.remove("hidden");
 }
 
-async function startRun() {
-  let data = null;
-  const rawData = $("data").value.trim();
-  if (rawData) {
-    try {
-      data = JSON.parse(rawData);
-    } catch (e) {
-      alert("Test data is not valid JSON: " + e.message);
-      return;
-    }
+// Parses the test-data textarea. Returns {ok:false} after alerting on bad JSON, so
+// every caller can bail out the same way.
+function readTestData() {
+  const raw = $("data").value.trim();
+  if (!raw) return { ok: true, data: null };
+  try {
+    return { ok: true, data: JSON.parse(raw) };
+  } catch (e) {
+    alert("Test data is not valid JSON: " + e.message);
+    return { ok: false };
   }
+}
+
+async function startRun() {
+  const parsed = readTestData();
+  if (!parsed.ok) return;
   const body = {
     instruction: $("instruction").value,
     target_url: $("target_url").value.trim() || null,
-    data,
+    data: parsed.data,
   };
   if (!body.instruction.trim()) {
     alert("Please enter an instruction.");
@@ -127,6 +136,7 @@ async function startRun() {
 
   timeline.innerHTML = "";
   verdictEl.classList.add("hidden");
+  compareEl.classList.add("hidden");
   runBtn.disabled = true;
   setStatus("running");
 
@@ -271,20 +281,14 @@ saveSuiteBtn.addEventListener("click", async () => {
   }
   const name = prompt("Name for this suite test:", instruction.slice(0, 60));
   if (!name) return;
-  let data = null;
-  const rawData = $("data").value.trim();
-  if (rawData) {
-    try { data = JSON.parse(rawData); } catch (e) {
-      alert("Test data is not valid JSON: " + e.message);
-      return;
-    }
-  }
+  const parsed = readTestData();
+  if (!parsed.ok) return;
   try {
     await api("POST", "/api/suite", {
       name,
       instruction,
       target_url: $("target_url").value.trim() || null,
-      data,
+      data: parsed.data,
       source_run_id: lastRunId, // last completed live run becomes the recording
     });
     loadSuite();
@@ -309,4 +313,286 @@ runSuiteBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Model comparison -------------------------------------------------------------
+
+const PROVIDERS = ["anthropic", "openai", "openrouter"];
+let config = { agent_provider: "", model: "", min_models: 2, max_models: 6 };
+
+function modelRow(model, provider) {
+  const row = document.createElement("div");
+  row.className = "model-row";
+
+  const select = document.createElement("select");
+  select.title = "Provider — leave on default to use the configured one";
+  for (const name of ["", ...PROVIDERS]) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name || "default";
+    option.selected = name === (provider || "");
+    select.appendChild(option);
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "model id";
+  input.value = model || "";
+
+  const remove = document.createElement("button");
+  remove.className = "rm";
+  remove.textContent = "×";
+  remove.title = "Remove this model";
+  remove.addEventListener("click", () => {
+    row.remove();
+    syncModelButtons();
+  });
+
+  row.append(select, input, remove);
+  return row;
+}
+
+function modelRows() {
+  return Array.from(compareModelsEl.querySelectorAll(".model-row"));
+}
+
+function syncModelButtons() {
+  addModelBtn.disabled = modelRows().length >= config.max_models;
+}
+
+function addModel(model, provider) {
+  compareModelsEl.appendChild(modelRow(model, provider));
+  syncModelButtons();
+}
+
+function readModels() {
+  return modelRows()
+    .map((row) => ({
+      provider: row.querySelector("select").value || null,
+      model: row.querySelector("input").value.trim(),
+    }))
+    .filter((entry) => entry.model);
+}
+
+function compareColumn(entry) {
+  const col = document.createElement("div");
+  col.className = "compare-col";
+
+  const head = document.createElement("header");
+  const name = document.createElement("div");
+  name.className = "model";
+  name.textContent = entry.model;
+  name.title = `${entry.provider} / ${entry.model}`;
+  head.append(name, badge("none", "running"));
+
+  const log = document.createElement("div");
+  log.className = "compare-log";
+  col.append(head, log);
+  col.dataset.runId = entry.run_id;
+  return col;
+}
+
+function logLine(col, cls, text) {
+  const log = col.querySelector(".compare-log");
+  const line = document.createElement("div");
+  line.className = "log-line " + cls;
+  line.textContent = text;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setColumnState(col, cls, text) {
+  const state = col.querySelector(".badge");
+  state.className = "badge " + cls;
+  state.textContent = text;
+}
+
+function handleCompareEvent(col, evt) {
+  const { type, data } = evt;
+  if (type === "step") {
+    logLine(col, "step", "→ " + data.tool);
+  } else if (type === "reasoning") {
+    // The columns are narrow; each run's full reasoning is in its own report.
+    const text = data.text.length > 240 ? data.text.slice(0, 240) + "…" : data.text;
+    logLine(col, "reasoning", text);
+  } else if (type === "assertion") {
+    logLine(col, data.passed ? "pass" : "fail",
+      (data.passed ? "✓ " : "✗ ") + data.description);
+  } else if (type === "warning") {
+    logLine(col, "warn", "⚠ " + data.message);
+  } else if (type === "report") {
+    setColumnState(col, data.verdict, data.verdict);
+  } else if (type === "error") {
+    setColumnState(col, "error", "error");
+    logLine(col, "fail", data.message);
+  }
+}
+
+const num = (n) => (n || 0).toLocaleString();
+
+const NUMERIC_COLUMNS = ["Steps", "Assertions", "Calls", "Input", "Output",
+  "Cache read", "Time"];
+
+function renderCompareSummary(payload, container) {
+  container.innerHTML = "";
+  const table = document.createElement("table");
+  table.className = "compare-table";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Model", "Provider", "Verdict", ...NUMERIC_COLUMNS, ""]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (NUMERIC_COLUMNS.includes(label)) th.className = "num";
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const r of payload.results) {
+    const tr = document.createElement("tr");
+    const cell = (text, cls) => {
+      const td = document.createElement("td");
+      if (cls) td.className = cls;
+      td.textContent = text;
+      tr.appendChild(td);
+    };
+    cell(r.model, "mono");
+    cell(r.provider);
+    const verdict = document.createElement("td");
+    verdict.appendChild(badge(r.verdict || "none", r.verdict || r.status));
+    verdict.title = r.summary || "";
+    tr.appendChild(verdict);
+    cell(r.steps, "num");
+    cell(`${r.assertions_passed}/${r.assertions}`, "num");
+    cell(r.calls, "num");
+    cell(num(r.input_tokens), "num");
+    cell(num(r.output_tokens), "num");
+    cell(num(r.cache_read_tokens), "num");
+    cell(r.duration_seconds == null ? "—" : `${r.duration_seconds}s`, "num");
+    const links = document.createElement("td");
+    const link = document.createElement("a");
+    link.href = `/api/runs/${r.run_id}/report.html`;
+    link.target = "_blank";
+    link.textContent = "report";
+    links.appendChild(link);
+    tr.appendChild(links);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  const title = document.createElement("h2");
+  title.textContent = "Results";
+  container.append(title, table);
+
+  const usage = payload.normalizer_usage;
+  if (usage && usage.calls) {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent =
+      `Shared normalizer (${usage.provider}/${usage.model}): ${usage.calls} call, ` +
+      `${num(usage.input_tokens)} in / ${num(usage.output_tokens)} out — billed once ` +
+      "to the comparison, not to any single model.";
+    container.appendChild(note);
+  }
+}
+
+async function startComparison() {
+  const instruction = $("instruction").value;
+  if (!instruction.trim()) {
+    alert("Please enter an instruction.");
+    return;
+  }
+  const parsed = readTestData();
+  if (!parsed.ok) return;
+  const models = readModels();
+  if (models.length < config.min_models) {
+    alert(`Enter at least ${config.min_models} models to compare.`);
+    return;
+  }
+
+  timeline.innerHTML = "";
+  verdictEl.classList.add("hidden");
+  compareEl.innerHTML = "";
+  compareEl.classList.remove("hidden");
+  runCompareBtn.disabled = true;
+  runBtn.disabled = true;
+  setStatus("normalizing");
+
+  let comparison;
+  try {
+    comparison = await api("POST", "/api/compare", {
+      instruction,
+      target_url: $("target_url").value.trim() || null,
+      data: parsed.data,
+      models,
+    });
+  } catch (e) {
+    setStatus("error");
+    runCompareBtn.disabled = false;
+    runBtn.disabled = false;
+    alert("Failed to start comparison: " + e.message);
+    return;
+  }
+
+  setStatus("running");
+  if (comparison.normalized_instruction) {
+    const card = document.createElement("div");
+    card.className = "card normalized";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = "shared instruction — every model is driven with this exact spec";
+    card.append(label, textNode(comparison.normalized_instruction, true));
+    compareEl.appendChild(card);
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "compare-grid";
+  const summary = document.createElement("div");
+  compareEl.append(grid, summary);
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  let openSockets = comparison.runs.length;
+  for (const entry of comparison.runs) {
+    const col = compareColumn(entry);
+    grid.appendChild(col);
+
+    const ws = new WebSocket(`${proto}://${location.host}/ws/runs/${entry.run_id}`);
+    ws.onmessage = (m) => handleCompareEvent(col, JSON.parse(m.data));
+    // onclose and onerror can both fire for one socket; count each run only once.
+    let settled = false;
+    const finish = async () => {
+      if (settled) return;
+      settled = true;
+      if (--openSockets > 0) return;
+      runCompareBtn.disabled = false;
+      runBtn.disabled = false;
+      setStatus("done");
+      try {
+        renderCompareSummary(
+          await api("GET", `/api/compare/${comparison.comparison_id}`), summary);
+      } catch (e) {
+        console.error("comparison results failed:", e);
+      }
+    };
+    ws.onclose = finish;
+    ws.onerror = finish;
+  }
+}
+
+addModelBtn.addEventListener("click", () => addModel("", ""));
+runCompareBtn.addEventListener("click", startComparison);
+
+async function loadConfig() {
+  try {
+    config = { ...config, ...(await api("GET", "/api/config")) };
+  } catch (e) {
+    console.error("config load failed:", e);
+  }
+  // Three rows by default, the first on the configured model as the baseline.
+  addModel(config.model, "");
+  addModel("", "");
+  addModel("", "");
+}
+
+loadConfig();
 loadSuite();

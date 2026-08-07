@@ -29,15 +29,37 @@ class RunManager:
         client_factory: Callable[[], Any],
         normalizer_factory: Callable[[], Any] | None = None,
         normalizer_settings: Settings | None = None,
+        client_factory_for: Callable[[Settings], Any] | None = None,
     ) -> None:
         self.settings = settings
         self.client_factory = client_factory
+        # Builds a client for *derived* settings, which is how a run overrides the
+        # configured model (the OpenAI/OpenRouter adapters bake settings in, so the
+        # client has to be rebuilt rather than reused). Falls back to the plain
+        # factory, which is what test/custom factories want.
+        self.client_factory_for = client_factory_for or (lambda _settings: client_factory())
         self.normalizer_factory = normalizer_factory
         self.normalizer_settings = normalizer_settings or settings
         self._runs: dict[str, Run] = {}
 
+    def run_settings(self, model: str | None = None, provider: str | None = None) -> Settings:
+        """Settings for one run, with the model/provider overridden when given."""
+        update: dict[str, Any] = {}
+        if model:
+            update["model"] = model
+        if provider:
+            update["agent_provider"] = provider
+        return self.settings.model_copy(update=update) if update else self.settings
+
     def create_run(
-        self, instruction: str, target_url: str | None, data: dict[str, Any] | None
+        self,
+        instruction: str,
+        target_url: str | None,
+        data: dict[str, Any] | None,
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+        normalized_instruction: str | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         run_dir = self.settings.output_dir / run_id
@@ -46,10 +68,17 @@ class RunManager:
         run = Run(run_id=run_id, bus=bus, run_dir=run_dir)
         self._runs[run_id] = run
 
+        settings = self.run_settings(model, provider)
+        # Only rebuild the client when this run overrides the configured model/provider.
+        client = (
+            self.client_factory()
+            if settings is self.settings
+            else self.client_factory_for(settings)
+        )
         merged_data = {**self.settings.data, **(data or {})}
         loop = AgentLoop(
-            client=self.client_factory(),
-            settings=self.settings,
+            client=client,
+            settings=settings,
             run_id=run_id,
             instruction=instruction,
             target_url=target_url,
@@ -58,6 +87,7 @@ class RunManager:
             run_dir=run_dir,
             normalizer_factory=self.normalizer_factory,
             normalizer_settings=self.normalizer_settings,
+            normalized_instruction=normalized_instruction,
         )
         run.task = asyncio.create_task(self._guarded_run(loop, bus))
         return run_id
