@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..compare import ComparisonRunner
 from ..config import Settings, load_settings, normalizer_settings
 from ..logging_config import configure_logging
 from ..suite import SuiteRunner, SuiteStore
@@ -81,10 +82,18 @@ def create_app(
     settings: Settings | None = None,
     client_factory: Callable[[], Any] | None = None,
     normalizer_factory: Callable[[], Any] | None = None,
+    client_factory_for: Callable[[Settings], Any] | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level)
     n_settings = normalizer_settings(settings)
+    # A model comparison runs each contender on derived settings, so it needs a factory
+    # that takes them. A caller supplying its own client_factory (tests, custom wiring)
+    # gets that client for every model unless it says otherwise.
+    if client_factory_for is None:
+        client_factory_for = (
+            (lambda _settings: client_factory()) if client_factory else build_client
+        )
     app = FastAPI(title="aiwebtest", version="0.1.0")
     app.state.settings = settings
     app.state.manager = RunManager(
@@ -92,9 +101,11 @@ def create_app(
         client_factory or _default_client_factory(settings),
         normalizer_factory=normalizer_factory or (lambda: build_client(n_settings)),
         normalizer_settings=n_settings,
+        client_factory_for=client_factory_for,
     )
     app.state.suite_store = SuiteStore(settings.output_dir / "suite.json")
     app.state.suite_runner = SuiteRunner(app.state.manager, app.state.suite_store)
+    app.state.comparison_runner = ComparisonRunner(app.state.manager)
 
     app.include_router(api_router)
     app.include_router(ws_router)

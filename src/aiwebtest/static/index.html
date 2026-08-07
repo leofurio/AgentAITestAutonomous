@@ -25,6 +25,15 @@
       <a class="side-link" href="/runner" target="_blank">Open Playwright runner</a>
       <div id="status" class="status idle">idle</div>
 
+      <section class="suite compare">
+        <h2>Compare models</h2>
+        <p class="hint">Runs the form above on every model at once — same page, same
+          instruction — and diffs what each one did and spent.</p>
+        <div id="compare-models"></div>
+        <button id="add-model" class="secondary">+ add model</button>
+        <button id="run-compare" class="secondary">Compare models</button>
+      </section>
+
       <section class="suite">
         <h2>Suite — saved tests</h2>
         <p class="hint">Save a test you wrote above to re-run it later without the AI —
@@ -40,6 +49,7 @@
 
     <main class="timeline-wrap">
       <div id="verdict" class="verdict hidden"></div>
+      <div id="compare" class="compare-results hidden"></div>
       <div id="timeline" class="timeline"></div>
     </main>
   </div>

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aiwebtest.agent.schemas import AssertionResult, Verdict
+from aiwebtest.agent.schemas import AssertionResult, ModelUsage, Verdict
 from aiwebtest.report.builder import ReportBuilder
 from aiwebtest.report.playwright_codegen import generate_playwright_script
 
@@ -44,6 +44,45 @@ def test_failing_assertion_forces_fail(tmp_path: Path):
                                     expected=None, actual="not visible", passed=False))
     report = b.finalize(Verdict.PASS, "agent thought it passed")  # declared pass
     assert report.verdict == Verdict.FAIL  # overridden by the failed assertion
+
+
+def test_report_details_every_model_used(tmp_path: Path):
+    # A run can span two models (browser agent + instruction normalizer) on different
+    # providers. The report must break the usage down per role, not just name one model.
+    b = _builder(tmp_path)
+    agent = ModelUsage(role="agent", provider="anthropic", model="claude-opus-4-8",
+                       effort="medium", max_tokens=8192)
+    b.track_model(agent)
+    b.track_model(ModelUsage(role="normalizer", provider="openrouter",
+                             model="vendor/cheap-model", max_tokens=1024, calls=1,
+                             input_tokens=300, output_tokens=90))
+    # Trackers are registered live: counts accumulated afterwards still reach the report.
+    agent.calls, agent.input_tokens, agent.output_tokens = 3, 1200, 450
+    agent.cache_read_tokens = 900
+
+    report = b.finalize(Verdict.PASS, "ok")
+    paths = b.persist()
+
+    assert report.model == "claude-opus-4-8"  # headline model is unchanged
+    data = json.loads(paths["json"].read_text())
+    assert [m["role"] for m in data["models"]] == ["agent", "normalizer"]
+    assert data["models"][0]["calls"] == 3
+    assert data["models"][0]["cache_read_tokens"] == 900
+    assert data["models"][1]["provider"] == "openrouter"
+
+    html = paths["html"].read_text()
+    assert "vendor/cheap-model" in html
+    assert "1,200" in html                 # thousands-separated token counts
+    assert "max_tokens=8192" in html       # request settings shown next to the model
+    assert "1,500" in html                 # totals row (1200 + 300 input tokens)
+
+
+def test_report_without_models_says_so(tmp_path: Path):
+    # A replay calls no model at all; the section must state that rather than look broken.
+    b = _builder(tmp_path)
+    b.finalize(Verdict.PASS, "ok")
+    html = b.persist()["html"].read_text()
+    assert "No model calls in this run" in html
 
 
 def test_playwright_replay_uses_stable_locators_and_settles(tmp_path: Path):

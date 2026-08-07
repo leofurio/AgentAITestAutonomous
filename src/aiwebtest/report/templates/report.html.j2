@@ -23,6 +23,9 @@
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border);
              vertical-align: top; }
     .ok { color: var(--pass); font-weight: 600; } .ko { color: var(--fail); font-weight: 600; }
+    td.mono { font-family: ui-monospace, monospace; white-space: nowrap; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .scroll { overflow-x: auto; }
     .step { border-left: 3px solid var(--border); padding: 6px 12px; margin: 8px 0; }
     .step.tool_call { border-color: #0969da; } .step.reasoning { border-color: #8250df; }
     .step .tool { font-family: ui-monospace, monospace; font-weight: 600; }
@@ -49,6 +52,54 @@
       <h2>Summary</h2>
       <p>{{ report.summary or "(no summary)" }}</p>
       <p><a href="playwright_test.py">Download generated Playwright script</a></p>
+    </section>
+
+    <section>
+      <h2>Models ({{ report.models | length }})</h2>
+      {% if report.models %}
+      <p class="meta">Every model this run called, and what each consumed. The agent drives
+        the browser; the normalizer is the instruction pre-pass, which can run on a
+        different provider or model.</p>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Role</th><th>Provider</th><th>Model</th><th>Request settings</th>
+          <th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th>
+          <th class="num">Cache read</th><th class="num">Cache write</th>
+        </tr></thead>
+        <tbody>
+        {% for m in report.models %}
+          <tr>
+            <td>{{ m.role }}</td>
+            <td>{{ m.provider or '—' }}</td>
+            <td class="mono">{{ m.model or '—' }}</td>
+            <td>
+              {%- set bits = [] -%}
+              {%- if m.max_tokens %}{{ bits.append('max_tokens=' ~ m.max_tokens) or '' }}{% endif -%}
+              {%- if m.effort %}{{ bits.append('effort=' ~ m.effort) or '' }}{% endif -%}
+              {{ bits | join(' · ') if bits else '—' }}
+            </td>
+            <td class="num">{{ m.calls }}</td>
+            <td class="num">{{ "{:,}".format(m.input_tokens) }}</td>
+            <td class="num">{{ "{:,}".format(m.output_tokens) }}</td>
+            <td class="num">{{ "{:,}".format(m.cache_read_tokens) }}</td>
+            <td class="num">{{ "{:,}".format(m.cache_write_tokens) }}</td>
+          </tr>
+        {% endfor %}
+          <tr>
+            <td colspan="4"><strong>Total</strong></td>
+            <td class="num"><strong>{{ report.models | sum(attribute='calls') }}</strong></td>
+            <td class="num"><strong>{{ "{:,}".format(report.models | sum(attribute='input_tokens')) }}</strong></td>
+            <td class="num"><strong>{{ "{:,}".format(report.models | sum(attribute='output_tokens')) }}</strong></td>
+            <td class="num"><strong>{{ "{:,}".format(report.models | sum(attribute='cache_read_tokens')) }}</strong></td>
+            <td class="num"><strong>{{ "{:,}".format(report.models | sum(attribute='cache_write_tokens')) }}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="meta">Token counts come from the provider's own usage reporting; a provider
+        that returns none leaves the counts at zero.</p>
+      {% else %}<p>No model calls in this run — nothing was sent to an LLM.</p>{% endif %}
     </section>
 
     {% if report.normalized_instruction %}

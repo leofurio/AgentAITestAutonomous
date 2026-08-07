@@ -73,6 +73,16 @@ async def test_successful_login_run(settings, browser_page):
     # Report artifacts written to disk.
     data = json.loads((run_dir / "report.json").read_text())
     assert data["verdict"] == "pass"
+
+    # The report details the model that drove the run, with a call count matching the
+    # turns the loop actually consumed (no normalizer here, so a single entry).
+    assert len(data["models"]) == 1
+    agent_model = data["models"][0]
+    assert agent_model["role"] == "agent"
+    assert agent_model["provider"] == "anthropic"
+    assert agent_model["model"] == settings.model
+    assert agent_model["effort"] == "high" and agent_model["max_tokens"] == 2048
+    assert agent_model["calls"] == len(turns)
     assert (run_dir / "report.html").exists()
     assert list((run_dir / "screenshots").glob("*.png")), "expected screenshots"
 
@@ -273,6 +283,13 @@ async def test_normalizer_pass_rewrites_instruction(settings, browser_page):
     assert norm_evt["data"]["text"] == canonical
     data = json.loads((run_dir / "report.json").read_text())
     assert data["normalized_instruction"] == canonical
+
+    # Both models the run used are reported separately, each with its own call count,
+    # so a normalizer on a cheaper model is visible as its own line item.
+    roles = {m["role"]: m for m in data["models"]}
+    assert set(roles) == {"agent", "normalizer"}
+    assert roles["agent"]["calls"] == len(turns)
+    assert roles["normalizer"]["calls"] == 1
 
 
 async def test_reminder_lets_agent_finish_after_prose_only_turn(settings, browser_page):

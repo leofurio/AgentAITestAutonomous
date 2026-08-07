@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..config import Settings
 from ..logging_config import get_logger
+from .schemas import ModelUsage
 
 logger = get_logger("providers")
 
@@ -31,6 +32,10 @@ class AnthropicAgentClient:
 
     client: Any
     settings: Settings
+    usage: ModelUsage = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.usage = _new_usage("anthropic", self.settings, self.settings.effort)
 
     async def complete(
         self,
@@ -61,6 +66,7 @@ class AnthropicAgentClient:
                 # Text deltas are surfaced from the final message; iterate to drive streaming.
                 pass
             message = await stream.get_final_message()
+        _record_usage(self.usage, _get(message, "usage"))
         content = _normalize_anthropic_blocks(message.content)
         _log_response("anthropic", content)
         return {"role": "assistant", "content": content}
@@ -73,6 +79,11 @@ class OpenAIAgentClient:
     client: Any
     settings: Settings
     previous_response_id: str | None = None
+    usage: ModelUsage = field(init=False)
+
+    def __post_init__(self) -> None:
+        # effort is not part of the Responses request built below, so it is not reported.
+        self.usage = _new_usage("openai", self.settings, None)
 
     async def complete(
         self,
@@ -93,6 +104,7 @@ class OpenAIAgentClient:
             kwargs["instructions"] = system_prompt
         _log_request("openai", self.settings.model, messages, tool_schemas)
         response = await self.client.responses.create(**kwargs)
+        _record_usage(self.usage, getattr(response, "usage", None))
         self.previous_response_id = getattr(response, "id", None)
         content = _normalize_openai_output(response)
         _log_response("openai", content)
@@ -123,6 +135,11 @@ class OpenRouterAgentClient:
 
     client: Any
     settings: Settings
+    usage: ModelUsage = field(init=False)
+
+    def __post_init__(self) -> None:
+        # effort has no Chat Completions equivalent here, so it is not reported.
+        self.usage = _new_usage("openrouter", self.settings, None)
 
     async def complete(
         self,
@@ -143,6 +160,7 @@ class OpenRouterAgentClient:
             kwargs["tools"] = [_to_openai_chat_tool(tool) for tool in tool_schemas]
             kwargs["tool_choice"] = "auto"
         completion = await self.client.chat.completions.create(**kwargs)
+        _record_usage(self.usage, getattr(completion, "usage", None))
         content = _normalize_openai_chat_completion(completion)
         _log_response("openrouter", content)
         return {"role": "assistant", "content": content}
@@ -153,6 +171,68 @@ def ensure_agent_client(client: Any, settings: Settings) -> AgentClient:
     if hasattr(client, "complete"):
         return client
     return AnthropicAgentClient(client=client, settings=settings)
+
+
+def usage_tracker(client: Any, settings: Settings, role: str) -> ModelUsage:
+    """Return ``client``'s live usage tracker, labelled with its role in the run.
+
+    The object is the adapter's own, so counts it accumulates *after* this call still
+    reach whoever holds the reference (the report). Custom clients supplied by tests or
+    user factories expose no tracker; they still get an entry describing the configured
+    provider/model, so the report always states what drove the run — only the token
+    counts stay at zero.
+    """
+    tracker = getattr(client, "usage", None)
+    if not isinstance(tracker, ModelUsage):
+        tracker = ModelUsage(
+            provider=settings.agent_provider,
+            model=settings.model,
+            max_tokens=settings.max_tokens,
+        )
+    tracker.role = role
+    return tracker
+
+
+def _new_usage(provider: str, settings: Settings, effort: str | None) -> ModelUsage:
+    """A zeroed usage tracker for one adapter, seeded with its request settings."""
+    return ModelUsage(
+        provider=provider,
+        model=settings.model,
+        effort=effort,
+        max_tokens=settings.max_tokens,
+    )
+
+
+def _record_usage(tracker: ModelUsage, raw: Any) -> None:
+    """Accumulate one API response's token counts into the adapter's tracker.
+
+    Deliberately tolerant: the providers spell the same counters differently, and a
+    response without usage must never break a run — it only costs us the numbers.
+    """
+    tracker.calls += 1
+    if raw is None:
+        return
+    tracker.input_tokens += _usage_int(raw, "input_tokens", "prompt_tokens")
+    tracker.output_tokens += _usage_int(raw, "output_tokens", "completion_tokens")
+    tracker.cache_write_tokens += _usage_int(raw, "cache_creation_input_tokens")
+    # Anthropic reports cache reads at the top level; the OpenAI-shaped APIs nest them.
+    cached = _usage_int(raw, "cache_read_input_tokens")
+    for details in ("input_tokens_details", "prompt_tokens_details"):
+        if cached:
+            break
+        cached = _usage_int(_get(raw, details), "cached_tokens")
+    tracker.cache_read_tokens += cached
+
+
+def _usage_int(raw: Any, *names: str) -> int:
+    """First integer among ``names`` on ``raw`` (dict or object), else 0."""
+    if raw is None:
+        return 0
+    for name in names:
+        value = _get(raw, name)
+        if isinstance(value, int):
+            return value
+    return 0
 
 
 def _with_cache_breakpoint(messages: list[AgentMessage]) -> list[AgentMessage]:

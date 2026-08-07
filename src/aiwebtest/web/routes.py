@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..compare import MAX_MODELS, MIN_MODELS, ModelSpec
 from ..replay import REPLAY_LOG_NAME
 
 router = APIRouter(prefix="/api")
@@ -51,6 +52,13 @@ class SuiteRunModeRequest(BaseModel):
 
 class SuiteRenameRequest(BaseModel):
     name: str
+
+
+class CompareRequest(BaseModel):
+    instruction: str
+    target_url: str | None = None
+    data: dict | None = None
+    models: list[ModelSpec]
 
 
 class CodeRunResponse(BaseModel):
@@ -131,6 +139,56 @@ async def get_playwright_script(run_id: str, request: Request) -> FileResponse:
 async def get_screenshot(run_id: str, filename: str, request: Request) -> FileResponse:
     safe = Path(filename).name  # strip any directory components
     return FileResponse(_artifact(request, run_id, f"screenshots/{safe}"), media_type="image/png")
+
+
+# --- Model comparison: the same test against several models in parallel -----------
+
+
+@router.get("/config")
+async def get_config(request: Request) -> dict:
+    """The configured provider/model, so the UI can prefill the comparison form.
+
+    Deliberately narrow: never expose API keys or the rest of the settings object.
+    """
+    settings = request.app.state.settings
+    return {
+        "agent_provider": settings.agent_provider,
+        "model": settings.model,
+        "min_models": MIN_MODELS,
+        "max_models": MAX_MODELS,
+    }
+
+
+@router.post("/compare")
+async def start_comparison(req: CompareRequest, request: Request) -> dict:
+    if not req.instruction.strip():
+        raise HTTPException(status_code=422, detail="instruction must not be empty")
+
+    models = [m for m in req.models if m.model.strip()]
+    for spec in models:
+        spec.model = spec.model.strip()
+        spec.provider = (spec.provider or "").strip() or None
+    if not MIN_MODELS <= len(models) <= MAX_MODELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"give between {MIN_MODELS} and {MAX_MODELS} models to compare",
+        )
+
+    runner = request.app.state.comparison_runner
+    # Returns as soon as the runs are started: they stream over /ws/runs/{run_id} and
+    # their outcomes are polled from GET /api/compare/{comparison_id}.
+    comparison = await runner.start(req.instruction, req.target_url, req.data, models)
+    return comparison.model_dump(mode="json")
+
+
+@router.get("/compare/{comparison_id}")
+async def get_comparison(comparison_id: str, request: Request) -> dict:
+    if not _RUN_ID_RE.fullmatch(comparison_id):
+        raise HTTPException(status_code=404, detail="comparison not found")
+    results = request.app.state.comparison_runner.results(comparison_id)
+    if results is None:
+        raise HTTPException(status_code=404, detail="comparison not found")
+    return results
 
 
 # --- Suite: saved tests, history, replay / self-healing re-runs -------------------

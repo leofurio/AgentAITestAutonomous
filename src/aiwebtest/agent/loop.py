@@ -16,7 +16,7 @@ from ..config import Settings
 from ..logging_config import get_logger
 from .events import EventBus
 from .prompts import SYSTEM_PROMPT, build_user_instruction
-from .providers import ensure_agent_client
+from .providers import ensure_agent_client, usage_tracker
 from .schemas import Verdict
 
 logger = get_logger("loop")
@@ -42,6 +42,7 @@ class AgentLoop:
         run_dir: Path,
         normalizer_factory: Callable[[], Any] | None = None,
         normalizer_settings: Settings | None = None,
+        normalized_instruction: str | None = None,
     ) -> None:
         self.client = ensure_agent_client(client, settings)
         self.settings = settings
@@ -56,6 +57,9 @@ class AgentLoop:
         # normalizer pass is skipped regardless of the config flag.
         self.normalizer_factory = normalizer_factory
         self.normalizer_settings = normalizer_settings or settings
+        # A canonical spec normalized elsewhere. Set by a model comparison, which
+        # normalizes once and drives every model with the identical input.
+        self.normalized_instruction = normalized_instruction
 
     def _allowed_domains(self) -> list[str]:
         configured = list(self.settings.agent.allowed_domains)
@@ -81,6 +85,9 @@ class AgentLoop:
             output_dir=self.run_dir,
             browser=self.settings.browser,
         )
+        # Registered before the first call so even a run that crashes reports which
+        # model was driving it; the tracker keeps filling in as the run proceeds.
+        builder.track_model(usage_tracker(self.client, self.settings, "agent"))
         self.bus.publish("status", state="starting")
 
         instruction = await self._maybe_normalize(builder)
@@ -124,6 +131,14 @@ class AgentLoop:
         best-effort: any failure falls back to the raw instruction so a run is never lost
         to a normalizer error.
         """
+        if self.normalized_instruction:
+            # Already normalized by the caller: re-running the pass here would change
+            # the input under test, which is exactly what a comparison must not do.
+            logger.debug("using the pre-normalized instruction supplied by the caller")
+            builder.set_normalized_instruction(self.normalized_instruction)
+            self.bus.publish("normalized", text=self.normalized_instruction)
+            return self.normalized_instruction
+
         if not self.settings.agent.normalize_instruction or self.normalizer_factory is None:
             logger.debug("normalization disabled or unavailable; using raw instruction")
             return self.instruction
@@ -134,6 +149,9 @@ class AgentLoop:
         logger.debug("normalizing instruction: %r", self.instruction)
         try:
             client = ensure_agent_client(self.normalizer_factory(), self.normalizer_settings)
+            # Tracked separately from the agent: the pre-pass can run on another
+            # provider/model entirely, and its cost is worth seeing on its own.
+            builder.track_model(usage_tracker(client, self.normalizer_settings, "normalizer"))
             normalizer = InstructionNormalizer(client, self.normalizer_settings)
             normalized = await normalizer.normalize(
                 self.instruction, self.target_url, self.data

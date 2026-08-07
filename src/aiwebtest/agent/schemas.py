@@ -25,6 +25,34 @@ class StepKind(StrEnum):
     TOOL_RESULT = "tool_result"
 
 
+class ModelUsage(BaseModel):
+    """One model as a run actually used it, with what it consumed.
+
+    A run can involve more than one: the browser-driving agent and the instruction
+    normalizer may sit on different providers and models (see ``normalizer_settings``).
+    The provider adapters accumulate into these objects while the run is in flight, so
+    a run that crashes still reports what it spent up to that point.
+    """
+
+    role: str = "agent"  # "agent" (browser loop) | "normalizer" (instruction pre-pass)
+    provider: str = ""
+    model: str = ""
+    # Request-shaping settings, when the adapter actually sends them (effort is
+    # Anthropic-only today); None means "not applicable to this provider".
+    effort: str | None = None
+    max_tokens: int | None = None
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Prompt-caching counters. Providers that report no usage leave every count at 0.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
 class AssertionResult(BaseModel):
     description: str
     condition: str
@@ -57,7 +85,10 @@ class TestReport(BaseModel):
     # Canonical rewrite of `instruction` produced by the normalizer pass, if it ran.
     normalized_instruction: str | None = None
     target_url: str | None = None
+    # Headline model of the run (the browser-driving agent); `models` below carries the
+    # per-role detail, including the normalizer when it runs on a different model.
     model: str
+    models: list[ModelUsage] = Field(default_factory=list)
     started_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
     verdict: Verdict = Verdict.ERROR

@@ -105,6 +105,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .badge.error { background: rgba(210,153,34,0.15); color: var(--warn); }
 .badge.none { background: rgba(139,148,158,0.15); color: var(--muted); }
 .badge.healed { background: rgba(137,87,229,0.15); color: #8957e5; }
+.model-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 26px; gap: 6px;
+  margin-bottom: 6px; align-items: center; }
+.model-row select, .model-row input { margin-top: 0; padding: 5px 6px; font-size: 12px; }
+.model-row select { background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; }
+.model-row button.rm { width: 26px; padding: 4px 0; font-size: 14px; font-weight: 500;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.model-row button.rm:hover { border-color: var(--fail); color: var(--fail); }
+.compare-results { display: flex; flex-direction: column; gap: 16px; max-width: 1100px; }
+.compare-results h2 { font-size: 16px; margin: 0 0 8px; }
+.compare-grid { display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.compare-col { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  display: flex; flex-direction: column; min-width: 0; }
+.compare-col header { display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.compare-col .model { font-weight: 600; font-size: 13px; font-family: ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-log { padding: 8px 12px; max-height: 320px; overflow-y: auto; font-size: 12px;
+  display: flex; flex-direction: column; gap: 4px; }
+.log-line { color: var(--muted); word-break: break-word; }
+.log-line.step { color: var(--text); font-family: ui-monospace, monospace; }
+.log-line.pass { color: var(--pass); }
+.log-line.fail { color: var(--fail); }
+.log-line.warn { color: var(--warn); }
+.compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.compare-table th, .compare-table td { text-align: left; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); }
+.compare-table th { color: var(--muted); font-weight: 600; }
+.compare-table th.num, .compare-table td.num { text-align: right;
+  font-variant-numeric: tabular-nums; }
+.compare-table td.mono { font-family: ui-monospace, monospace; white-space: nowrap; }
+.compare-table a { color: var(--accent); }
 .runner-shell { min-height: 100vh; padding: 20px; }
 .runner-header { display: flex; justify-content: space-between; align-items: flex-start;
   gap: 20px; margin-bottom: 16px; }

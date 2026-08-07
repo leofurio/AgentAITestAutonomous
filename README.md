@@ -28,6 +28,9 @@ expected outcomes, and produces a pass/fail report with screenshots and a full s
 - **Suite**: save any test (optionally attached to a completed run's recording) into a
   persistent suite with per-test **run history**, re-run tests individually or in batch,
   and let broken recordings **self-heal** (see below).
+- **Compare models**: run one test against several models **in parallel** — optionally
+  across providers — and diff their verdicts, steps and token spend side by side (see
+  below).
 
 ## How it works
 
@@ -82,6 +85,69 @@ AIWEBTEST_AGENT__NORMALIZE_INSTRUCTION=false   # disable
 AIWEBTEST_NORMALIZER_MODEL=claude-haiku-4-5    # normalize on a lighter model
 AIWEBTEST_NORMALIZER_MAX_TOKENS=1024           # cap the canonical spec size
 AIWEBTEST_NORMALIZER_EFFORT=low                # cheaper rewrite (empty = reuse effort)
+```
+
+### Model usage in the report
+
+Because a run can span two models on two providers (the browser-driving agent and the
+normalizer above), every report carries a **Models** section — and a `models` array in
+`report.json` — breaking the run down per role:
+
+| role | provider | model | request settings | calls | input | output | cache read | cache write |
+|---|---|---|---|---|---|---|---|---|
+| agent | anthropic | claude-opus-4-8 | max_tokens=8192 · effort=medium | 7 | 18,432 | 1,204 | 92,160 | 6,144 |
+| normalizer | openrouter | qwen/qwen3-8b | max_tokens=1024 | 1 | 412 | 88 | 0 | 0 |
+
+Token counts come from each provider's own usage reporting (a provider that reports none
+leaves them at zero), and they accumulate while the run is in flight — so a run that
+crashes still shows what it spent up to that point. A replay calls no model at all: its
+report says so, and names the model that recorded the script.
+
+### Compare models: the same test, several models, side by side
+
+Picking the model for a suite is otherwise guesswork — a cheaper one may drive a given
+flow just as reliably as the flagship, and the only way to find out is to watch them do
+the same job. The **Compare models** panel takes the instruction, URL and data already in
+the form, plus a list of models (three rows by default, the first prefilled with the
+configured model), and starts one ordinary run per model **in parallel**. Each column
+streams live; when they finish you get a diff table:
+
+| Model | Provider | Verdict | Steps | Assertions | Calls | Input | Output | Cache read | Time |
+|---|---|---|---|---|---|---|---|---|---|
+| swift-1 | anthropic | PASS | 4 | 1/1 | 4 | 4,800 | 360 | 19,200 | 1.3s |
+| thrifty-mini | anthropic | FAIL | 5 | 1/2 | 5 | 4,800 | 300 | 19,200 | 1.4s |
+| deliberate-xl | anthropic | PASS | 6 | 1/1 | 6 | 9,600 | 780 | 38,400 | 1.4s |
+
+Leave a row's provider on `default` to use the configured one, or pick another to compare
+**across** providers (say Anthropic against OpenRouter) in the same table.
+
+Two things make this a fair comparison rather than merely a simultaneous one:
+
+- **One instruction for everyone.** The normalizer pass runs *once*, up front, and every
+  model is handed the identical canonical spec — shown above the columns. Letting each run
+  normalize for itself would change the input under test between models.
+- **One shared cost line.** That single normalizer call is reported on the comparison, not
+  folded into any model's numbers, so no contender is charged for input it did not shape.
+
+Each contender is a normal run: it writes its own `report.json`, `report.html` and
+`playwright_test.py` under `runs/<run_id>/` (linked from the table), so the winner's
+recording can go straight into the suite. The comparison itself is a thin index at
+`runs/<comparison_id>/comparison.json`, so results survive a restart.
+
+Note that N models means N browsers at once — with the default `headless: false` you will
+see them all open.
+
+```bash
+curl -X POST localhost:8000/api/compare -H 'content-type: application/json' -d '{
+  "instruction": "Log in and verify the welcome message.",
+  "target_url": "https://example.com/login",
+  "data": {"username": "demo", "password": "secret"},
+  "models": [{"model": "claude-opus-4-8"},
+             {"model": "claude-haiku-4-5"},
+             {"model": "qwen/qwen3-8b", "provider": "openrouter"}]
+}'
+# → {"comparison_id": "cmp_...", "runs": [{"run_id": "...", "model": "...", ...}]}
+curl localhost:8000/api/compare/cmp_...   # progress and, once done, the results
 ```
 
 ### Suite: saved tests, batch runs, self-healing
