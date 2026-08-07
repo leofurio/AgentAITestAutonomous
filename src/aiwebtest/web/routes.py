@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..compare import MAX_MODELS, MIN_MODELS, ModelSpec
 from ..replay import REPLAY_LOG_NAME
 
 router = APIRouter(prefix="/api")
@@ -51,6 +52,13 @@ class SuiteRunModeRequest(BaseModel):
 
 class SuiteRenameRequest(BaseModel):
     name: str
+
+
+class CompareRequest(BaseModel):
+    instruction: str
+    target_url: str | None = None
+    data: dict | None = None
+    models: list[ModelSpec]
 
 
 class CodeRunResponse(BaseModel):

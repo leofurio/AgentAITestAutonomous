@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -173,24 +174,69 @@ def test_unknown_comparison_is_404(settings):
         assert client.get("/api/compare/%2e%2e").status_code == 404
 
 
+def _rejection(response) -> str:
+    """The reason a request was rejected, insisting it came from our own validation.
+
+    FastAPI also answers 422 when it cannot resolve the endpoint's body model at all —
+    it then treats the parameter as a missing *query* field and never parses the body.
+    That failure mode once made a completely dead endpoint look validated, so assert
+    the shape: only our HTTPException produces a plain-string detail.
+    """
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert isinstance(detail, str), f"request body was never parsed: {detail}"
+    return detail
+
+
 def test_compare_endpoint_validates_the_model_list(settings):
     with TestClient(_app(settings, client_factory=lambda: None)) as client:
         too_few = client.post("/api/compare", json={
             "instruction": "log in", "models": [{"model": "only-one"}],
         })
-        assert too_few.status_code == 422
+        assert "between 2 and 6 models" in _rejection(too_few)
 
         # Blank entries are dropped before counting, so three empty rows are "too few".
         blanks = client.post("/api/compare", json={
             "instruction": "log in",
             "models": [{"model": "a"}, {"model": "  "}, {"model": ""}],
         })
-        assert blanks.status_code == 422
+        assert "between 2 and 6 models" in _rejection(blanks)
 
         empty_instruction = client.post("/api/compare", json={
             "instruction": "  ", "models": [{"model": "a"}, {"model": "b"}],
         })
-        assert empty_instruction.status_code == 422
+        assert "instruction must not be empty" in _rejection(empty_instruction)
+
+
+@pytest.mark.asyncio
+async def test_compare_endpoint_starts_runs_from_the_request_body(settings):
+    # The happy path over real HTTP. Without it, only rejection paths were exercised,
+    # and a broken endpoint that never reads its body still looked like it validated.
+    app = _app(
+        settings,
+        client_factory=lambda: FakeAnthropicClient(_finishing_turns()),
+        normalizer_factory=_no_op_normalizer,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/compare", json={
+            "instruction": "log in",
+            "target_url": "https://example.test",
+            "models": [{"model": "model-a"}, {"model": "model-b", "provider": "openai"}],
+        })
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["comparison_id"].startswith("cmp_")
+    assert [r["model"] for r in body["runs"]] == ["model-a", "model-b"]
+    assert [r["provider"] for r in body["runs"]] == [settings.agent_provider, "openai"]
+
+    for entry in body["runs"]:
+        await app.state.manager.get(entry["run_id"]).task
+
+    results = app.state.comparison_runner.results(body["comparison_id"])
+    assert results["pending"] == 0
+    assert [r["verdict"] for r in results["results"]] == ["pass", "pass"]
 
 
 def test_config_endpoint_exposes_only_provider_and_model(settings):
