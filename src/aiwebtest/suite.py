@@ -7,12 +7,15 @@ without an AI model. Re-running a suite test therefore has three modes:
 - ``replay``: execute the recorded script (fast, free, deterministic).
 - ``agent``: run the full agentic loop again (re-records the test).
 - ``auto`` (default): replay first; when the replay **errors** (broken locator,
-  crash — the *test* broke, not the app) fall back to an agent run that re-records
-  the script. A replay that *fails* its assertions is reported as a genuine fail —
-  healing must never mask a real regression.
+  crash — the *test* broke, not the app) self-heal in two tiers before giving up:
+  first a *localized repair* (re-run the recording in-process and let the agent
+  re-point only the failing step against the live page — cheap, keeps the rest of the
+  deterministic replay), then, only if that still errors, a full agent re-run that
+  re-records the script. A replay that *fails* its assertions is reported as a genuine
+  fail — healing must never mask a real regression.
 
-Every executed run is appended to the test's history, so the suite shows whether a
-test passed yesterday and whether it needed healing.
+Every executed run (replay, localized heal, agent) is appended to the test's history,
+so the suite shows whether a test passed yesterday and whether it needed healing.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .logging_config import get_logger
+from .replay import REPLAY_LOG_NAME
 
 logger = get_logger("suite")
 
@@ -39,14 +43,26 @@ RUN_MODES = ("auto", "replay", "agent")
 _HISTORY_LIMIT = 50
 
 
+def _write_log(work_dir: Path, output: bytes, note: str = "") -> None:
+    """Persist a run's step log; never let a logging failure break the run."""
+    try:
+        text = output.decode("utf-8", errors="replace")
+        if note:
+            text = f"{text}\n{note}\n"
+        (work_dir / REPLAY_LOG_NAME).write_text(text, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - the log is diagnostics, not the result
+        logger.warning("could not write %s in %s: %s", REPLAY_LOG_NAME, work_dir, exc)
+
+
 class RunRecord(BaseModel):
-    """One executed run of a suite test (replay or agent)."""
+    """One executed run of a suite test (replay, localized heal, or agent)."""
 
     run_id: str
-    mode: str  # "replay" | "agent"
+    mode: str  # "replay" | "heal" | "agent"
     verdict: str  # "pass" | "fail" | "error"
     summary: str = ""
-    # True on the agent run that re-recorded a test after its replay errored.
+    # True on a run that re-recorded a test after its replay errored (an in-process
+    # localized heal, or a full agent re-run).
     healed: bool = False
     finished_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -125,12 +141,22 @@ class SuiteStore:
         self._save()
         return True
 
+    def rename(self, test_id: str, name: str) -> SuiteTest | None:
+        """Give a saved test a new display name; returns None when it is unknown."""
+        test = self._tests.get(test_id)
+        if test is None:
+            return None
+        test.name = name
+        self._save()
+        return test
+
     def record_run(self, test_id: str, record: RunRecord) -> None:
         test = self._tests[test_id]
         test.history.append(record)
         del test.history[:-_HISTORY_LIMIT]
-        # A passing agent run is the freshest good recording: replay it next time.
-        if record.mode == "agent" and record.verdict == "pass":
+        # A passing agent run or localized heal is the freshest good recording (both write
+        # a fresh playwright_test.py with the corrected locators): replay it next time.
+        if record.mode in ("agent", "heal") and record.verdict == "pass":
             test.source_run_id = record.run_id
         self._save()
 
@@ -166,6 +192,16 @@ class SuiteRunner:
             # crash) — re-record it. A fail is the app regressing: report it.
             if not (mode == "auto" and record.verdict == "error"):
                 return record
+
+            # Tier 1 heal: re-point only the failing step in-process (cheap, keeps the
+            # rest of the deterministic replay). Its pass/fail is authoritative — a fail
+            # is a real regression surfaced by the repaired flow, not something to mask
+            # with a full re-run. Only a heal that still *errors* escalates to Tier 2.
+            heal = await self._localized_repair(test)
+            if heal is not None:
+                self.store.record_run(test_id, heal)
+                if heal.verdict in ("pass", "fail"):
+                    return heal
             logger.info("replay of %s errored; healing with an agent re-run", test.name)
 
         healed = mode == "auto" and script is not None
@@ -185,6 +221,61 @@ class SuiteRunner:
             return None
         script = self.manager.settings.output_dir / test.source_run_id / "playwright_test.py"
         return script if script.exists() else None
+
+    def _recording_report(self, test: SuiteTest):
+        """Load the recorded run's report.json (the step plan the heal re-executes)."""
+        from .agent.schemas import TestReport
+
+        if not test.source_run_id:
+            return None
+        path = self.manager.settings.output_dir / test.source_run_id / "report.json"
+        if not path.exists():
+            return None
+        try:
+            return TestReport.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - a bad recording just skips the heal tier
+            logger.warning("could not read recording report %s: %s", path, exc)
+            return None
+
+    async def _localized_repair(self, test: SuiteTest) -> RunRecord | None:
+        """In-process heal: re-run the recording, re-pointing the broken step via the AI.
+
+        Returns the run record, or None when the tier is unavailable (disabled, no agent
+        client, unreadable recording) or crashed — in which case the caller falls back to
+        the full agent re-run, preserving the prior behavior.
+        """
+        settings = self.manager.settings
+        client_factory = getattr(self.manager, "client_factory", None)
+        if not settings.agent.localized_repair or client_factory is None:
+            return None
+        report = self._recording_report(test)
+        if report is None:
+            return None
+
+        from .agent.providers import ensure_agent_client
+        from .replay.executor import LocalizedReplayer
+        from .replay.repair import RepairAgent
+
+        run_id = f"heal_{uuid.uuid4().hex[:12]}"
+        try:
+            client = ensure_agent_client(client_factory(), settings)
+            repair = RepairAgent(client, settings).repair
+            replayer = LocalizedReplayer(
+                report=report,
+                browser=settings.browser,
+                output_dir=settings.output_dir / run_id,
+                run_id=run_id,
+                repair=repair,
+                include_screenshots=settings.agent.include_screenshots,
+            )
+            outcome = await replayer.run()
+        except Exception as exc:  # noqa: BLE001 - degrade to the agent re-run, never crash
+            logger.warning("localized repair of %s failed to start: %s", test.name, exc)
+            return None
+        return RunRecord(
+            run_id=outcome.run_id, mode="heal", verdict=outcome.verdict,
+            summary=outcome.summary, healed=True,
+        )
 
     async def _replay(self, script: Path) -> RunRecord:
         """Execute the recorded script in its own run dir; read back its report."""
@@ -206,15 +297,20 @@ class SuiteRunner:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self.replay_timeout)
         except TimeoutError:
             proc.kill()
-            await proc.communicate()
+            stdout, _ = await proc.communicate()
+            # Persist whatever the run managed to print: on a timeout the step log is
+            # the only evidence of how far it got.
+            _write_log(work_dir, stdout, f"--- timed out after {self.replay_timeout}s ---")
             return RunRecord(
                 run_id=run_id, mode="replay", verdict="error",
                 summary=f"Replay timed out after {self.replay_timeout}s",
             )
 
-        verdict, summary = self._replay_outcome(
-            work_dir, proc.returncode, stdout.decode("utf-8", errors="replace")
-        )
+        text = stdout.decode("utf-8", errors="replace")
+        # The script narrates every step it executes ("step 3/7: click", "PASS: ..."),
+        # which is the human-readable record of what an AI-free run actually did.
+        _write_log(work_dir, stdout)
+        verdict, summary = self._replay_outcome(work_dir, proc.returncode, text)
         return RunRecord(run_id=run_id, mode="replay", verdict=verdict, summary=summary)
 
     @staticmethod

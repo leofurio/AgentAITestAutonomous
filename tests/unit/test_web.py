@@ -39,6 +39,26 @@ def test_runner_served(settings):
     assert "Playwright runner" in resp.text
 
 
+def test_runner_has_upload_control(settings):
+    # The runner must expose a .py file upload that loads a script into the editor.
+    with _client(settings) as client:
+        resp = client.get("/runner")
+    assert resp.status_code == 200
+    assert 'id="upload"' in resp.text
+    assert 'type="file"' in resp.text
+    assert 'accept=".py' in resp.text
+
+
+def test_frontend_is_served_no_cache(settings):
+    # The UI must revalidate so a browser never runs stale bundled JS/HTML against a
+    # newer server (which would make new features silently do nothing until a hard refresh).
+    with _client(settings) as client:
+        page = client.get("/runner")
+        asset = client.get("/static/runner.js")
+    assert page.headers.get("cache-control") == "no-cache"
+    assert asset.headers.get("cache-control") == "no-cache"
+
+
 def test_execute_playwright_code_runs_python(settings):
     with _client(settings) as client:
         resp = client.post("/api/playwright/execute", json={"code": "print('hello')"})
@@ -59,4 +79,24 @@ def test_traversal_run_id_is_404(settings):
     with _client(settings) as client:
         # %2e%2e decodes to ".." — must not escape the runs directory.
         resp = client.get("/api/runs/%2e%2e/report.json")
+    assert resp.status_code == 404
+
+
+def test_heal_rejected_when_code_runner_disabled(settings):
+    settings = settings.model_copy(update={"code_runner_enabled": False})
+    with _client(settings) as client:
+        resp = client.post("/api/playwright/heal", json={"run_id": "abc123"})
+    assert resp.status_code == 403
+
+
+def test_heal_unknown_recording_is_404(settings):
+    with _client(settings) as client:
+        resp = client.post("/api/playwright/heal", json={"run_id": "doesnotexist"})
+    assert resp.status_code == 404
+
+
+def test_heal_traversal_run_id_is_404(settings):
+    with _client(settings) as client:
+        # A run id that isn't a plain slug must never resolve a path outside runs/.
+        resp = client.post("/api/playwright/heal", json={"run_id": "../evil"})
     assert resp.status_code == 404

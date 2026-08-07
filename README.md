@@ -163,9 +163,35 @@ Three run modes:
 - `replay` — execute the recorded script (fast, free, deterministic).
 - `agent` — full agentic run; a **passing** agent run becomes the new recording.
 - `auto` (default) — replay first; if the replay **errors** (stale locator, crash — the
-  *test* broke, not the app) it self-heals: the agent re-runs the saved instruction and
-  re-records the script. A replay that *fails its assertions* is reported as a genuine
-  fail — healing never masks a real regression.
+  *test* broke, not the app) it self-heals in two tiers. A replay that *fails its
+  assertions* is reported as a genuine fail — healing never masks a real regression.
+
+**Two-tier self-healing (on an `auto`-replay error).** A single renamed button should not
+cost a full agentic re-run, so healing starts *localized*:
+
+1. **Localized repair** (`agent.localized_repair`, default on) — the recording is re-run
+   **in-process**, and at the exact step whose locator no longer resolves, the agent is
+   shown the live page and picks the element the step meant (`get_by_role`/name/id
+   descriptors decide first; the model is asked only when they all miss). The rest of the
+   deterministic replay is kept. A successful heal writes a fresh recording with the
+   corrected locators, so the next replay is deterministic again — and it stays *off the
+   happy path*: it fires only on an error, only when an agent client is configured, so
+   plain `replay`/CI never call a model. A replay that *fails an assertion* is a
+   regression and is reported as such, never healed.
+2. **Full agent re-run** — only if the localized repair itself still **errors** (the site
+   changed structurally and a single step can't be re-pointed) does the agent re-run the
+   whole saved instruction and re-record the script.
+
+Every tier is appended to the test's history, so you can see whether a run passed, needed
+a localized heal, or needed a full re-record.
+
+**Run log.** Every model-free run writes a `replay.log` next to its report: the
+step-by-step narration of what it actually did (`step 3/7: click`, `PASS: ...`, and for a
+heal, which locator had to be re-pointed). In the UI each saved test has an expandable
+**Run log** listing every run with its verdict, what it was (*replayed without AI*,
+*self-healed*, *full AI run*), and links to its steps log and report — so an AI-free run
+is auditable rather than a black box. Saved tests can also be renamed with the ✏️ button
+(`PATCH /api/suite/<test_id>` with `{"name": "..."}`).
 
 In the UI, use **Save form as suite test** (the last completed live run is attached as
 the recording) and the per-test ▶ auto / 🤖 agent buttons, or **Run all (auto)** for a
@@ -234,8 +260,21 @@ On Windows, prefer the `aiwebtest` entrypoint instead of `uvicorn --reload`: Pla
 async driver needs an event loop that supports subprocesses.
 
 After a run completes, use the `download Playwright code` link to save the generated
-script, or open `run code` to load it into `/runner`. The runner executes pasted Python
-code locally, so use it only for scripts you trust.
+script, or open `run code` to load it into `/runner`. In the runner you can also **upload
+a `.py` file** (the *Upload .py* button) or drag-and-drop one onto the editor to load it as
+the script to run. The runner executes the code locally, so use it only for scripts you
+trust.
+
+**Auto-heal in the runner.** Tick **Auto-heal broken locators on error** before running a
+script that was opened via a completed test's `run code` link. If the run errors on a
+broken/renamed locator, the runner calls `POST /api/playwright/heal` with that recording's
+run id: the same in-process localized repair re-points the failing step against the live
+site and re-records a corrected script, which you can load back into the editor with one
+click. It fires only on an *error*, never on an assertion *fail* (a real regression is
+reported, not healed), and only for scripts backed by a recording — hand-pasted code has
+no recorded step intent to repair. The endpoint is gated like the code runner
+(`code_runner_enabled`, local-only unless `code_runner_allow_remote`) and needs an agent
+client configured.
 
 ## Run tests (headless — CI / containers)
 

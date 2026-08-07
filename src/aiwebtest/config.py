@@ -45,6 +45,11 @@ class AgentConfig(BaseModel):
     # normalized spec before driving the browser. Trades one extra LLM call for more
     # deterministic, repeatable runs.
     normalize_instruction: bool = True
+    # When an `auto` suite replay *errors* (a broken locator — the test broke, not the
+    # app), first try an in-process localized repair: the agent re-points only the failing
+    # step against the live page, keeping the rest of the deterministic replay, before
+    # falling back to a full agent re-run. Disable to go straight to the full re-run.
+    localized_repair: bool = True
 
 
 class ReportConfig(BaseModel):

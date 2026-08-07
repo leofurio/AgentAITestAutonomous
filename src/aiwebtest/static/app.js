@@ -233,23 +233,107 @@ function suiteItem(test) {
     b.addEventListener("click", () => fn(b));
     actions.appendChild(b);
   };
-  mkBtn("▶ auto", "Replay the recording; self-heal via the agent if it broke",
+  mkBtn("▶ Run", "Replay the recording without the AI; if it broke, heal the failing step in-place, then a full AI re-run only if needed",
     (b) => runSuiteTest(test.test_id, "auto", b));
-  mkBtn("🤖 agent", "Full agentic run (re-records on pass)",
+  mkBtn("🤖 Re-run with AI", "Full agent run that re-records the test when it passes",
     (b) => runSuiteTest(test.test_id, "agent", b));
+  mkBtn("✏️", "Rename this test", async () => {
+    const name = prompt("New name for this test:", test.name);
+    if (name === null) return;            // cancelled
+    if (!name.trim()) {
+      alert("The name must not be empty.");
+      return;
+    }
+    try {
+      await api("PATCH", `/api/suite/${test.test_id}`, { name: name.trim() });
+      loadSuite();
+    } catch (e) {
+      alert("Rename failed: " + e.message);
+    }
+  });
   mkBtn("✕", "Delete this suite test", async () => {
     if (!confirm(`Delete suite test "${test.name}"?`)) return;
     await api("DELETE", `/api/suite/${test.test_id}`);
     loadSuite();
   });
   item.appendChild(actions);
+
+  if (test.history.length) item.appendChild(historyBlock(test.history));
   return item;
+}
+
+// What each run mode means, in the user's terms: the history is where you check what a
+// saved test actually did — especially the AI-free replays.
+const MODE_LABEL = {
+  replay: "replayed without AI",
+  heal: "self-healed (AI fixed one step)",
+  agent: "full AI run",
+};
+
+function historyBlock(history) {
+  const details = document.createElement("details");
+  details.className = "run-log";
+  const summary = document.createElement("summary");
+  summary.textContent = `Run log (${history.length})`;
+  details.appendChild(summary);
+
+  // Newest first: the last run is what you almost always want to inspect.
+  for (const record of [...history].reverse()) {
+    const row = document.createElement("div");
+    row.className = "run-entry";
+
+    const head = document.createElement("div");
+    head.className = "row";
+    head.appendChild(badge(record.verdict, record.verdict));
+    const what = document.createElement("span");
+    what.className = "run-mode";
+    what.textContent = MODE_LABEL[record.mode] || record.mode;
+    head.appendChild(what);
+    row.appendChild(head);
+
+    const when = document.createElement("div");
+    when.className = "meta";
+    when.textContent = new Date(record.finished_at).toLocaleString();
+    row.appendChild(when);
+
+    if (record.summary) {
+      const text = document.createElement("div");
+      text.className = "run-summary";
+      text.textContent = record.summary;
+      row.appendChild(text);
+    }
+
+    const links = document.createElement("div");
+    links.className = "run-links";
+    if (record.log_url) links.appendChild(link(record.log_url, "steps log"));
+    if (record.report_url) links.appendChild(link(record.report_url, "report"));
+    if (links.children.length) row.appendChild(links);
+
+    details.appendChild(row);
+  }
+  return details;
+}
+
+function link(href, text) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.target = "_blank";
+  a.textContent = text;
+  return a;
 }
 
 async function loadSuite() {
   try {
     const data = await api("GET", "/api/suite");
     suiteList.innerHTML = "";
+    if (!data.tests.length) {
+      const empty = document.createElement("p");
+      empty.className = "hint suite-empty";
+      empty.textContent =
+        "No saved tests yet — write a test above and click “Save current test to suite”.";
+      suiteList.appendChild(empty);
+      return;
+    }
     for (const test of data.tests) suiteList.appendChild(suiteItem(test));
   } catch (e) {
     // Suite UI is secondary: never block the main flow on it.
@@ -299,16 +383,20 @@ saveSuiteBtn.addEventListener("click", async () => {
 
 runSuiteBtn.addEventListener("click", async () => {
   runSuiteBtn.disabled = true;
-  runSuiteBtn.textContent = "Running suite…";
+  runSuiteBtn.textContent = "Running…";
   try {
     const res = await api("POST", "/api/suite/run_all", { mode: "auto" });
-    setStatus(res.passed === res.total ? "done" : "error");
-    alert(`Suite: ${res.passed}/${res.total} passed`);
+    if (!res.total) {
+      alert("No saved tests yet — save one first with “Save current test to suite”.");
+    } else {
+      setStatus(res.passed === res.total ? "done" : "error");
+      alert(`Suite: ${res.passed} of ${res.total} passed`);
+    }
   } catch (e) {
     alert("Suite run failed: " + e.message);
   } finally {
     runSuiteBtn.disabled = false;
-    runSuiteBtn.textContent = "Run all (auto)";
+    runSuiteBtn.textContent = "Run all saved tests";
     loadSuite();
   }
 });
