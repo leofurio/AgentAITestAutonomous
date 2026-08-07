@@ -16,7 +16,7 @@ from ..config import Settings
 from ..logging_config import get_logger
 from .events import EventBus
 from .prompts import SYSTEM_PROMPT, build_user_instruction
-from .providers import ensure_agent_client
+from .providers import ensure_agent_client, usage_tracker
 from .schemas import Verdict
 
 logger = get_logger("loop")
@@ -81,6 +81,9 @@ class AgentLoop:
             output_dir=self.run_dir,
             browser=self.settings.browser,
         )
+        # Registered before the first call so even a run that crashes reports which
+        # model was driving it; the tracker keeps filling in as the run proceeds.
+        builder.track_model(usage_tracker(self.client, self.settings, "agent"))
         self.bus.publish("status", state="starting")
 
         instruction = await self._maybe_normalize(builder)
@@ -134,6 +137,9 @@ class AgentLoop:
         logger.debug("normalizing instruction: %r", self.instruction)
         try:
             client = ensure_agent_client(self.normalizer_factory(), self.normalizer_settings)
+            # Tracked separately from the agent: the pre-pass can run on another
+            # provider/model entirely, and its cost is worth seeing on its own.
+            builder.track_model(usage_tracker(client, self.normalizer_settings, "normalizer"))
             normalizer = InstructionNormalizer(client, self.normalizer_settings)
             normalized = await normalizer.normalize(
                 self.instruction, self.target_url, self.data

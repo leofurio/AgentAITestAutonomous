@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..agent.schemas import AssertionResult, Step, StepKind, TestReport, Verdict
+from ..agent.schemas import (
+    AssertionResult,
+    ModelUsage,
+    Step,
+    StepKind,
+    TestReport,
+    Verdict,
+)
 from ..config import BrowserConfig
 from .html import render_html
 from .playwright_codegen import generate_playwright_script
@@ -29,6 +36,14 @@ class ReportBuilder:
 
     def set_normalized_instruction(self, text: str) -> None:
         self.report.normalized_instruction = text
+
+    def track_model(self, usage: ModelUsage) -> None:
+        """Register a model this run uses.
+
+        The *live* tracker is stored, not a copy, so token counts the provider
+        accumulates after this call still land in the persisted report.
+        """
+        self.report.models.append(usage)
 
     def add_reasoning(self, text: str) -> Step:
         step = Step(index=self._next_index(), kind=StepKind.REASONING, text=text)

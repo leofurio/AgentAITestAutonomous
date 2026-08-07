@@ -7,10 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from aiwebtest.agent.providers import (
+    AnthropicAgentClient,
     OpenAIAgentClient,
     OpenRouterAgentClient,
     _normalize_anthropic_blocks,
     _with_cache_breakpoint,
+    usage_tracker,
 )
 from aiwebtest.config import Settings
 
@@ -76,6 +78,11 @@ class _FakeResponses:
                     arguments='{"url":"https://example.test"}',
                 )
             ],
+            usage=SimpleNamespace(
+                input_tokens=100,
+                output_tokens=20,
+                input_tokens_details=SimpleNamespace(cached_tokens=80),
+            ),
         )
 
 
@@ -106,7 +113,8 @@ class _FakeOpenRouterCompletions:
                         ],
                     )
                 )
-            ]
+            ],
+            usage=SimpleNamespace(prompt_tokens=250, completion_tokens=40),
         )
 
 
@@ -305,3 +313,85 @@ async def test_openai_omits_tools_when_none_given():
     await provider.complete([{"role": "user", "content": "normalize this"}], [], "system")
 
     assert "tools" not in client.responses.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_accumulates_token_usage():
+    # The report details what each model consumed, so every turn's usage must add up.
+    provider = OpenAIAgentClient(_FakeOpenAI(), _settings())
+
+    await provider.complete([{"role": "user", "content": "go"}], [], "system")
+    await provider.complete([{"role": "user", "content": "go"}], [], "system")
+
+    assert provider.usage.provider == "openai"
+    assert provider.usage.model == "gpt-test"
+    assert provider.usage.max_tokens == 1024
+    assert provider.usage.calls == 2
+    assert provider.usage.input_tokens == 200
+    assert provider.usage.output_tokens == 40
+    assert provider.usage.cache_read_tokens == 160  # nested input_tokens_details
+    assert provider.usage.total_tokens == 240
+
+
+@pytest.mark.asyncio
+async def test_openrouter_provider_maps_chat_completion_token_names():
+    # Chat Completions spells the same counters prompt_/completion_tokens.
+    provider = OpenRouterAgentClient(_FakeOpenRouter(), _settings())
+
+    await provider.complete([{"role": "user", "content": "go"}], [], "system")
+
+    assert provider.usage.provider == "openrouter"
+    assert provider.usage.input_tokens == 250
+    assert provider.usage.output_tokens == 40
+
+
+@pytest.mark.asyncio
+async def test_anthropic_provider_records_cache_counters():
+    message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="ok")],
+        usage=SimpleNamespace(
+            input_tokens=10, output_tokens=5,
+            cache_read_input_tokens=900, cache_creation_input_tokens=1500,
+        ),
+    )
+
+    class _Stream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        @property
+        def text_stream(self):
+            return self._iter()
+
+        async def _iter(self):
+            yield "ok"
+
+        async def get_final_message(self):
+            return message
+
+    client = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kwargs: _Stream()))
+    provider = AnthropicAgentClient(client, _settings())
+
+    await provider.complete([{"role": "user", "content": "go"}], [], "system")
+
+    # Prompt caching is the point of the request shape; the report shows both sides.
+    assert provider.usage.cache_read_tokens == 900
+    assert provider.usage.cache_write_tokens == 1500
+    assert provider.usage.effort == "high"  # only Anthropic sends effort
+
+
+def test_usage_tracker_falls_back_for_clients_without_one():
+    # Custom/test clients expose no tracker; the report must still name the model.
+    settings = _settings()
+    tracker = usage_tracker(object(), settings, "normalizer")
+
+    assert tracker.role == "normalizer"
+    assert (tracker.provider, tracker.model, tracker.calls) == ("openai", "gpt-test", 0)
+
+    # An adapter's own tracker is returned as-is, only labelled with its role.
+    provider = OpenAIAgentClient(_FakeOpenAI(), settings)
+    assert usage_tracker(provider, settings, "agent") is provider.usage
+    assert provider.usage.role == "agent"

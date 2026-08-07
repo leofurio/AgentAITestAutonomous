@@ -76,8 +76,11 @@ class Recorder:
             print('note: aiwebtest is not importable; skipping report.json/report.html')
             return
         self._schemas = schemas
+        # No model is called during a replay; naming the recording model keeps the
+        # provenance of the steps visible in the replay's own report.
         self._builder = ReportBuilder(
-            run_id=out.name, instruction=INSTRUCTION, model='replay',
+            run_id=out.name, instruction=INSTRUCTION,
+            model=f'replay (recorded with {RECORDED_MODEL})',
             target_url=TARGET_URL, output_dir=out,
         )
 
@@ -275,6 +278,7 @@ def generate_playwright_script(report: TestReport, browser: BrowserConfig | None
         f"ACTION_TIMEOUT_MS = {cfg.action_timeout_ms}",
         f"INSTRUCTION = {report.instruction!r}",
         f"TARGET_URL = {report.target_url!r}",
+        f"RECORDED_MODEL = {report.model!r}  # model that recorded these steps",
         f"TOTAL_STEPS = {total_steps}",
         "",
         _HELPERS_PREFIX,

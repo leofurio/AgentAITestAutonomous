@@ -84,6 +84,22 @@ AIWEBTEST_NORMALIZER_MAX_TOKENS=1024           # cap the canonical spec size
 AIWEBTEST_NORMALIZER_EFFORT=low                # cheaper rewrite (empty = reuse effort)
 ```
 
+### Model usage in the report
+
+Because a run can span two models on two providers (the browser-driving agent and the
+normalizer above), every report carries a **Models** section — and a `models` array in
+`report.json` — breaking the run down per role:
+
+| role | provider | model | request settings | calls | input | output | cache read | cache write |
+|---|---|---|---|---|---|---|---|---|
+| agent | anthropic | claude-opus-4-8 | max_tokens=8192 · effort=medium | 7 | 18,432 | 1,204 | 92,160 | 6,144 |
+| normalizer | openrouter | qwen/qwen3-8b | max_tokens=1024 | 1 | 412 | 88 | 0 | 0 |
+
+Token counts come from each provider's own usage reporting (a provider that reports none
+leaves them at zero), and they accumulate while the run is in flight — so a run that
+crashes still shows what it spent up to that point. A replay calls no model at all: its
+report says so, and names the model that recorded the script.
+
 ### Suite: saved tests, batch runs, self-healing
 
 The agent is for **authoring** a test; the suite is for **reusing** it. A suite test is
