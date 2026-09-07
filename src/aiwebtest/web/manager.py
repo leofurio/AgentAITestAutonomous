@@ -13,6 +13,9 @@ from ..agent.events import EventBus
 from ..agent.loop import AgentLoop
 from ..config import Settings
 
+# Aliased: the class already has a `normalizer_settings` attribute and parameter.
+from ..config import normalizer_settings as derive_normalizer_settings
+
 
 @dataclass
 class Run:
@@ -30,15 +33,19 @@ class RunManager:
         normalizer_factory: Callable[[], Any] | None = None,
         normalizer_settings: Settings | None = None,
         client_factory_for: Callable[[Settings], Any] | None = None,
+        normalizer_factory_for: Callable[[Settings], Any] | None = None,
     ) -> None:
         self.settings = settings
         self.client_factory = client_factory
-        # Builds a client for *derived* settings, which is how a run overrides the
+        # Build a client for *derived* settings, which is how a run overrides the
         # configured model (the OpenAI/OpenRouter adapters bake settings in, so the
-        # client has to be rebuilt rather than reused). Falls back to the plain
-        # factory, which is what test/custom factories want.
+        # client has to be rebuilt rather than reused). Both fall back to the plain
+        # factories, which is what test/custom factories want.
         self.client_factory_for = client_factory_for or (lambda _settings: client_factory())
         self.normalizer_factory = normalizer_factory
+        self.normalizer_factory_for = normalizer_factory_for or (
+            (lambda _settings: normalizer_factory()) if normalizer_factory else None
+        )
         self.normalizer_settings = normalizer_settings or settings
         self._runs: dict[str, Run] = {}
 
@@ -51,6 +58,28 @@ class RunManager:
             update["agent_provider"] = provider
         return self.settings.model_copy(update=update) if update else self.settings
 
+    def _clients_for(
+        self, settings: Settings
+    ) -> tuple[Any, Callable[[], Any] | None, Settings]:
+        """The agent client, normalizer factory and normalizer settings for one run.
+
+        A run on the configured model reuses the app-level clients untouched. A run that
+        overrides the model rebuilds both, deriving the normalizer from *its own*
+        settings: ``normalizer_model`` is empty by default, meaning "reuse the run's
+        model", so each contender in a comparison normalizes with itself — the same
+        thing that happens in an ordinary run.
+        """
+        if settings is self.settings:
+            return self.client_factory(), self.normalizer_factory, self.normalizer_settings
+
+        n_settings = derive_normalizer_settings(settings)
+        n_factory = (
+            (lambda: self.normalizer_factory_for(n_settings))
+            if self.normalizer_factory_for
+            else None
+        )
+        return self.client_factory_for(settings), n_factory, n_settings
+
     def create_run(
         self,
         instruction: str,
@@ -59,7 +88,6 @@ class RunManager:
         *,
         model: str | None = None,
         provider: str | None = None,
-        normalized_instruction: str | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         run_dir = self.settings.output_dir / run_id
@@ -69,12 +97,7 @@ class RunManager:
         self._runs[run_id] = run
 
         settings = self.run_settings(model, provider)
-        # Only rebuild the client when this run overrides the configured model/provider.
-        client = (
-            self.client_factory()
-            if settings is self.settings
-            else self.client_factory_for(settings)
-        )
+        client, n_factory, n_settings = self._clients_for(settings)
         merged_data = {**self.settings.data, **(data or {})}
         loop = AgentLoop(
             client=client,
@@ -85,9 +108,8 @@ class RunManager:
             data=merged_data,
             bus=bus,
             run_dir=run_dir,
-            normalizer_factory=self.normalizer_factory,
-            normalizer_settings=self.normalizer_settings,
-            normalized_instruction=normalized_instruction,
+            normalizer_factory=n_factory,
+            normalizer_settings=n_settings,
         )
         run.task = asyncio.create_task(self._guarded_run(loop, bus))
         return run_id

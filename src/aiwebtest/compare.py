@@ -5,13 +5,13 @@ drive a given flow just as reliably as the flagship, and the only way to find ou
 watch them do the same job. A comparison starts one ordinary run per model, in parallel,
 and collects each one's verdict, steps and token spend side by side.
 
-Two things make the comparison fair rather than merely simultaneous:
-
-- **One instruction for everyone.** The normalizer pass runs *once*, up front, and every
-  model is handed the identical canonical spec. Letting each run normalize for itself
-  would change the input under test between models and quietly invalidate the result.
-- **One shared cost line.** That single normalizer call is reported on the comparison
-  itself, not folded into any model's numbers.
+Every contender is compared on the *whole pipeline*, not just the browser-driving step.
+Each run normalizes the instruction with its own model and then drives the browser with
+its own canonical spec, so the comparison answers the question actually being asked —
+"how does this test go if I configure this model?" — and reports the full token cost of
+that answer. It mirrors an ordinary run, where ``normalizer_model`` defaults to empty and
+therefore reuses the run's own model. How each contender chose to read the request is
+itself a result worth seeing, so the specs are surfaced side by side.
 
 Each run is a normal run: it writes its own ``report.json`` / ``report.html`` /
 ``playwright_test.py`` under ``runs/<run_id>/`` and streams over the usual WebSocket. The
@@ -30,7 +30,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .agent.schemas import ModelUsage
 from .logging_config import get_logger
 
 logger = get_logger("compare")
@@ -62,9 +61,6 @@ class Comparison(BaseModel):
     comparison_id: str
     instruction: str
     target_url: str | None = None
-    # The canonical spec every model was driven with, and what producing it cost.
-    normalized_instruction: str | None = None
-    normalizer_usage: ModelUsage | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     runs: list[ComparisonRun] = Field(default_factory=list)
 
@@ -82,9 +78,8 @@ class ComparisonRunner:
         data: dict[str, Any] | None,
         models: list[ModelSpec],
     ) -> Comparison:
-        """Normalize once, then launch one run per model concurrently."""
+        """Launch one run per model concurrently, each on its own model end to end."""
         comparison_id = f"cmp_{uuid.uuid4().hex[:12]}"
-        normalized, usage = await self._normalize_once(instruction, target_url, data)
 
         runs = []
         for spec in models:
@@ -92,13 +87,12 @@ class ComparisonRunner:
             run_id = self.manager.create_run(
                 instruction, target_url, data,
                 model=spec.model, provider=provider,
-                normalized_instruction=normalized,
             )
             runs.append(ComparisonRun(run_id=run_id, model=spec.model, provider=provider))
 
         comparison = Comparison(
-            comparison_id=comparison_id, instruction=instruction, target_url=target_url,
-            normalized_instruction=normalized, normalizer_usage=usage, runs=runs,
+            comparison_id=comparison_id, instruction=instruction,
+            target_url=target_url, runs=runs,
         )
         self._persist(comparison)
         logger.info(
@@ -137,6 +131,7 @@ class ComparisonRunner:
         result: dict[str, Any] = {
             "run_id": entry.run_id, "model": entry.model, "provider": entry.provider,
             "status": "pending", "verdict": None, "summary": "",
+            "normalized_instruction": None,
             "steps": 0, "assertions": 0, "assertions_passed": 0,
             "calls": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_read_tokens": 0, "cache_write_tokens": 0, "duration_seconds": None,
@@ -151,53 +146,20 @@ class ComparisonRunner:
             status="done",
             verdict=report.get("verdict"),
             summary=report.get("summary", ""),
+            # How this contender chose to read the request — a result in its own right.
+            normalized_instruction=report.get("normalized_instruction"),
             steps=sum(1 for s in steps if s.get("kind") == "tool_call"),
             assertions=len(assertions),
             assertions_passed=sum(1 for a in assertions if a.get("passed")),
             duration_seconds=_duration(report),
         )
-        # The agent's own spend. The shared normalizer is billed to the comparison, not
-        # to a contender, so a model is never charged for input it did not shape.
+        # Every role the run used, normalizer included: each contender normalizes with
+        # its own model, so that call is part of what choosing this model costs.
         for usage in report.get("models") or []:
-            if usage.get("role") != "agent":
-                continue
             for key in ("calls", "input_tokens", "output_tokens",
                         "cache_read_tokens", "cache_write_tokens"):
                 result[key] += usage.get(key, 0) or 0
         return result
-
-    async def _normalize_once(
-        self,
-        instruction: str,
-        target_url: str | None,
-        data: dict[str, Any] | None,
-    ) -> tuple[str | None, ModelUsage | None]:
-        """Produce the canonical spec shared by every model, or (None, None).
-
-        Best-effort, like a normal run: if the pass is disabled or fails, every model is
-        driven with the raw instruction instead — still identical for all of them.
-        """
-        manager = self.manager
-        if not manager.settings.agent.normalize_instruction or manager.normalizer_factory is None:
-            return None, None
-
-        from .agent.normalizer import InstructionNormalizer
-        from .agent.providers import ensure_agent_client, usage_tracker
-
-        settings = manager.normalizer_settings
-        try:
-            client = ensure_agent_client(manager.normalizer_factory(), settings)
-            usage = usage_tracker(client, settings, "normalizer")
-            normalized = await InstructionNormalizer(client, settings).normalize(
-                instruction, target_url, {**manager.settings.data, **(data or {})}
-            )
-        except Exception as exc:  # noqa: BLE001 - never lose a comparison to the pre-pass
-            logger.warning("comparison normalization skipped: %s", exc)
-            return None, None
-
-        if not normalized or normalized.strip() == instruction.strip():
-            return None, usage
-        return normalized, usage
 
     def _dir(self, comparison_id: str) -> Path:
         return self.manager.settings.output_dir / comparison_id

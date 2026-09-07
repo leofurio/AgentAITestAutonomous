@@ -114,20 +114,23 @@ streams live; when they finish you get a diff table:
 
 | Model | Provider | Verdict | Steps | Assertions | Calls | Input | Output | Cache read | Time |
 |---|---|---|---|---|---|---|---|---|---|
-| swift-1 | anthropic | PASS | 4 | 1/1 | 4 | 4,800 | 360 | 19,200 | 1.3s |
-| thrifty-mini | anthropic | FAIL | 5 | 1/2 | 5 | 4,800 | 300 | 19,200 | 1.4s |
-| deliberate-xl | anthropic | PASS | 6 | 1/1 | 6 | 9,600 | 780 | 38,400 | 1.4s |
+| swift-1 | anthropic | PASS | 4 | 1/1 | 5 | 5,110 | 405 | 19,200 | 1.6s |
+| thrifty-mini | anthropic | FAIL | 5 | 1/2 | 6 | 5,110 | 345 | 19,200 | 1.7s |
+| deliberate-xl | anthropic | PASS | 6 | 1/1 | 7 | 9,910 | 825 | 38,400 | 1.7s |
 
 Leave a row's provider on `default` to use the configured one, or pick another to compare
 **across** providers (say Anthropic against OpenRouter) in the same table.
 
-Two things make this a fair comparison rather than merely a simultaneous one:
+Each contender is compared on the **whole pipeline**, not just the browser-driving step:
+it normalizes the request with its own model and then drives the browser with its own
+canonical spec. That mirrors an ordinary run — `normalizer_model` is empty by default,
+meaning "reuse the run's model" — so the table answers the question actually being asked,
+*"how does this test go if I configure this model?"*, and the token counts include that
+model's own normalizer call, because it is part of what choosing the model costs.
 
-- **One instruction for everyone.** The normalizer pass runs *once*, up front, and every
-  model is handed the identical canonical spec — shown above the columns. Letting each run
-  normalize for itself would change the input under test between models.
-- **One shared cost line.** That single normalizer call is reported on the comparison, not
-  folded into any model's numbers, so no contender is charged for input it did not shape.
+How each contender read the request is itself a result, so the specs are shown side by
+side under the table. A terse rewrite that drops a check is often exactly why one model
+took fewer steps than another.
 
 Each contender is a normal run: it writes its own `report.json`, `report.html` and
 `playwright_test.py` under `runs/<run_id>/` (linked from the table), so the winner's
