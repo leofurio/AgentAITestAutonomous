@@ -50,19 +50,31 @@ instruction (plus the target URL and the data keys) into a canonical, compact pl
 spec:
 
 ```
-GOAL: <one clause>
+GOAL: complete the purchase
 STEPS:
-1. <action>
-2. <action>
-CHECKS:
-- <verifiable check>
+1. navigate to the login page
+   CHECK: username and password fields are visible
+2. type {username} and {password}
+3. click Login
+   CHECK: product listing shows products
+4. add the backpack to the cart
+   CHECK: cart badge shows 1
 ```
+
+**Each check sits under the step after which it holds**, and the agent asserts it there
+before moving on. This is what makes checks verifiable at all: in a stateful flow most
+outcomes are observable only at one moment — the login form is gone once you sign in, the
+cart badge resets at checkout — so a check gathered into a trailing list has no moment to
+be evaluated in, and the agent would have to guess one. That guess is exactly the
+run-to-run variance this pass exists to remove.
 
 This line-oriented form is more token-efficient than JSON (no braces/quotes/repeated keys)
 and far more reliable for models to emit, which cuts down on fallbacks. A tolerant parser
 accepts common label/bullet variants and re-serializes them into the exact form above
-(fixed section order, renumbered steps), so the same intent yields the same bytes. Feeding
-the agent this canonical spec instead of raw prose reduces run-to-run variance. The pass is
+(fixed section order, renumbered steps, checks under their step), so the same intent yields
+the same bytes. A model that ignores the format and still emits one trailing `CHECKS:` list
+keeps it trailing rather than having a step guessed for it. Feeding the agent this
+canonical spec instead of raw prose reduces run-to-run variance. The pass is
 conservative: it clarifies and structures, never inventing steps or leaking secret values
 (data is referenced by key, e.g. `{password}`). The canonical rewrite is streamed to the UI
 and recorded in the report. It is best-effort: if the output has no objective or steps, the

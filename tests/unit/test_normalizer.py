@@ -36,10 +36,10 @@ async def test_normalize_returns_canonical_spec():
     Objective: log in
     Steps:
     - navigate to login
+      check: username and password fields are visible
     2) type {username} and {password}
     * click submit
-    Expected results:
-    - welcome message shown
+      CHECK: welcome message shown
     """
     client = _FakeClient(raw)
     normalizer = InstructionNormalizer(client, _settings())
@@ -52,10 +52,10 @@ async def test_normalize_returns_canonical_spec():
         "GOAL: log in\n"
         "STEPS:\n"
         "1. navigate to login\n"
+        "   CHECK: username and password fields are visible\n"
         "2. type {username} and {password}\n"
         "3. click submit\n"
-        "CHECKS:\n"
-        "- welcome message shown"
+        "   CHECK: welcome message shown"
     )
     # No tools are offered to the normalizer — it only produces text.
     messages, tools, system_prompt = client.calls[0]
@@ -124,6 +124,77 @@ def test_to_canonical_spec_ignores_preamble_before_goal():
     out = _to_canonical_spec(raw)
     assert out == "GOAL: log in\nSTEPS:\n1. go to login"
 
+
+
+def test_checks_stay_with_the_step_they_follow():
+    # The point of attaching checks: in a stateful flow most outcomes are observable
+    # only at one moment, so each must be asserted where it actually holds. Collected
+    # into a trailing list they are unverifiable — the login form is gone by the end.
+    raw = """GOAL: complete SauceDemo purchase
+STEPS:
+1. navigate to https://www.saucedemo.com/
+   CHECK: Username and Password fields are visible
+2. type {username} into Username
+3. click Login
+   CHECK: product listing page shows products
+4. click Add to Cart for Sauce Labs Backpack
+   CHECK: cart badge shows 1
+5. click Finish
+   CHECK: confirmation shows "Thank you for your order!"
+"""
+    out = _to_canonical_spec(raw)
+
+    assert out == (
+        "GOAL: complete SauceDemo purchase\n"
+        "STEPS:\n"
+        "1. navigate to https://www.saucedemo.com/\n"
+        "   CHECK: Username and Password fields are visible\n"
+        "2. type {username} into Username\n"
+        "3. click Login\n"
+        "   CHECK: product listing page shows products\n"
+        "4. click Add to Cart for Sauce Labs Backpack\n"
+        "   CHECK: cart badge shows 1\n"
+        "5. click Finish\n"
+        '   CHECK: confirmation shows "Thank you for your order!"'
+    )
+    # No check drifts to the end, where it could no longer be evaluated.
+    assert "CHECKS:" not in out
+
+
+def test_a_step_may_carry_several_checks_or_none():
+    out = _to_canonical_spec(
+        "GOAL: x\nSTEPS:\n1. open\n2. submit\n   CHECK: a\n   CHECK: b"
+    )
+    assert out == "GOAL: x\nSTEPS:\n1. open\n2. submit\n   CHECK: a\n   CHECK: b"
+
+
+def test_trailing_checks_list_is_kept_at_the_end():
+    # A model that ignores the format still produces a usable spec: its unplaced checks
+    # stay trailing rather than being pinned to a step we would have to guess.
+    out = _to_canonical_spec("GOAL: x\nSTEPS:\n1. go\n2. click\nCHECKS:\n- a\n- b")
+    assert out == "GOAL: x\nSTEPS:\n1. go\n2. click\nCHECKS:\n- a\n- b"
+
+
+def test_orphan_and_empty_checks_never_corrupt_the_steps():
+    # A check before any step has nothing to attach to, and a bare "CHECK:" names no
+    # outcome — neither may end up masquerading as a step.
+    out = _to_canonical_spec("GOAL: x\nCHECK: orphan\nSTEPS:\n1. go\nCHECK:")
+    assert out == "GOAL: x\nSTEPS:\n1. go\nCHECKS:\n- orphan"
+
+
+def test_normalizer_prompt_demands_checks_under_their_step():
+    from aiwebtest.agent.normalizer import NORMALIZE_SYSTEM_PROMPT
+
+    assert "CHECK:" in NORMALIZE_SYSTEM_PROMPT
+    assert "NEVER gather the checks into a list at the end" in NORMALIZE_SYSTEM_PROMPT
+
+
+def test_agent_is_told_to_assert_each_check_in_place():
+    # The format change is inert unless the agent asserts at that point in the flow.
+    from aiwebtest.agent.prompts import SYSTEM_PROMPT
+
+    assert "assert it immediately after" in SYSTEM_PROMPT
+    assert "Do not defer checks to the end" in SYSTEM_PROMPT
 
 
 def test_build_request_omits_optional_sections():

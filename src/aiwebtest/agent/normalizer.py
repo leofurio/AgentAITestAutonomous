@@ -6,14 +6,20 @@ agent loop this canonical spec — instead of the raw prose — reduces run-to-r
 the same intent yields the same steps and the same checks. The pass is deliberately
 conservative: it clarifies and structures, it never invents steps or data.
 
-The canonical form is a **compact, line-oriented plain-text spec**::
+The canonical form is a **compact, line-oriented plain-text spec** in which every check
+sits under the step after which it must hold::
 
     GOAL: <one clause>
     STEPS:
     1. <action>
+       CHECK: <outcome true right after step 1>
     2. <action>
-    CHECKS:
-    - <verifiable check>
+
+Attaching checks to their step is what makes them verifiable at all: in a stateful flow
+most outcomes are observable only at one moment — a login form is gone once you sign in,
+a cart badge resets at checkout — so a check collected into a trailing list has no moment
+to be evaluated in, and the agent has to guess one. That guess is exactly the run-to-run
+variance this pass exists to remove.
 
 This is more token-efficient than JSON (no braces/quotes/repeated keys) and far more
 reliable for models to emit than strict JSON, which cuts down on fallbacks. A tolerant
@@ -54,23 +60,27 @@ No preamble, no closing remarks, no explanations, no JSON, no markdown fences:
 GOAL: <one short clause>
 STEPS:
 1. <action>
+   CHECK: <outcome that is true right after this step>
 2. <action>
-CHECKS:
-- <verifiable check>
 
-Omit the entire CHECKS section if the request states no expected outcome.
+Attach every check to the step after which it holds, as an indented "CHECK:" line. A step \
+may carry none, one, or several. NEVER gather the checks into a list at the end: most are \
+true only at one moment — the login form is gone once you sign in, the cart badge resets \
+at checkout — so a check parked at the end cannot be evaluated. If the request states no \
+expected outcome, emit no CHECK lines at all.
 
 Example:
 GOAL: sign in succeeds
 STEPS:
 1. navigate to login
+   CHECK: username and password fields are visible
 2. type {username} and {password}
 3. click sign in
-CHECKS:
-- dashboard shows welcome message
+   CHECK: dashboard shows welcome message
 """
 
 _GOAL_LABELS = ("goal:", "objective:")
+_CHECK_PREFIX = "check:"
 _STEPS_HEADERS = ("steps", "step")
 _CHECKS_HEADERS = (
     "checks", "check", "expected", "expected result", "expected results",
@@ -109,19 +119,21 @@ class InstructionNormalizer:
 
 
 def _to_canonical_spec(text: str) -> str | None:
-    """Parse the model output into the canonical GOAL/STEPS/CHECKS spec.
+    """Parse the model output into the canonical GOAL/STEPS spec.
 
-    Tolerant of label and bullet variants. Returns the canonical string (fixed section
-    order, renumbered steps) or None when there is no objective or no steps, so the caller
-    can fall back to the raw instruction.
+    Tolerant of label and bullet variants, and of a model that still emits one trailing
+    checks list instead of attaching each check to its step. Returns the canonical string
+    (fixed section order, renumbered steps, each check under the step it follows) or None
+    when there is no objective or no steps, so the caller can fall back to the raw
+    instruction.
     """
     payload = _strip_code_fence(text)
     if not payload:
         return None
 
     objective = ""
-    steps: list[str] = []
-    checks: list[str] = []
+    steps: list[tuple[str, list[str]]] = []  # (action, checks that hold after it)
+    unplaced: list[str] = []                 # checks with no step to attach to
     section = "steps"  # content after GOAL (before any header) is treated as steps
 
     for raw_line in payload.splitlines():
@@ -149,17 +161,37 @@ def _to_canonical_spec(text: str) -> str | None:
         item = _strip_bullet(line)
         if not item:
             continue
-        (checks if section == "checks" else steps).append(item)
+
+        check = _as_check(item)  # None when the line is not a "CHECK:" line
+        if section == "checks":
+            # A model that ignored the format and emitted a trailing list. Keep those
+            # checks at the end rather than inventing a step for them: guessing where
+            # an unplaced check belongs is exactly the variance this pass removes.
+            unplaced.append(check or item)
+        elif check:
+            (steps[-1][1] if steps else unplaced).append(check)
+        elif check is None:
+            steps.append((item, []))
+        # else: a bare "CHECK:" naming no outcome — drop it.
 
     if not objective or not steps:
         return None
 
     lines = [f"GOAL: {objective}", "STEPS:"]
-    lines += [f"{i}. {step}" for i, step in enumerate(steps, 1)]
-    if checks:
+    for index, (action, step_checks) in enumerate(steps, 1):
+        lines.append(f"{index}. {action}")
+        lines += [f"   CHECK: {check}" for check in step_checks]
+    if unplaced:
         lines.append("CHECKS:")
-        lines += [f"- {check}" for check in checks]
+        lines += [f"- {check}" for check in unplaced]
     return "\n".join(lines)
+
+
+def _as_check(item: str) -> str | None:
+    """The outcome text when ``item`` is a "CHECK: ..." line, else None."""
+    if not item.lower().startswith(_CHECK_PREFIX):
+        return None
+    return item[len(_CHECK_PREFIX):].strip()
 
 
 def _strip_bullet(line: str) -> str:
