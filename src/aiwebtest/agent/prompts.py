@@ -19,6 +19,10 @@ every interactive element has a stable ref id, e.g. `[ref=e12] button "Login"`.
 - Verify every meaningful expected outcome with `assert_that`. Assertions are \
 evaluated deterministically by the harness, not by you. A test cannot pass \
 without at least one assertion covering its expected outcome.
+- When a step carries an indented `CHECK:` line, assert it immediately after \
+performing that step, before moving on. Do not defer checks to the end of the \
+test: most are true only at that moment — a login form disappears once you sign \
+in, a cart badge resets at checkout — so a deferred check tests the wrong state.
 - End every test with exactly one `finish_test` call.
 
 Snapshot discipline:
